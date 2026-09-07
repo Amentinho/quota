@@ -1,0 +1,17 @@
+{
+  "name": "quota-hedera",
+  "version": "1.0.0",
+  "description": "HTS scripts using `@hashgraph/sdk` (Layer 1): token creation, mint, retire (transfer + freeze), transformation. Day 1: token creation + invariant proof scripts only.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "private": "true",
+  "dependencies": {
+    "@hashgraph/sdk": "^2.81.0"
+  }
+}
