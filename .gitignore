@@ -1,0 +1,27 @@
+# secrets
+.env
+.env.local
+*.pem
+*.key
+
+# node
+node_modules/
+npm-debug.log*
+
+# hardhat
+contracts/artifacts/
+contracts/cache/
+contracts/typechain-types/
+
+# graph
+subgraph/generated/
+subgraph/build/
+
+# vite / react app
+app/dist/
+app/.vite/
+
+# os / editor
+.DS_Store
+.vscode/
+*.swp
