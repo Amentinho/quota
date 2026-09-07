@@ -145,3 +145,5 @@ Next:
 - Report HBAR cost per transaction.
 
 Resolved: repo is public and pushed to https://github.com/Amentinho/quota via SSH (gh CLI is broken on this machine — see above — so we generated a dedicated ed25519 key at `~/.ssh/id_ed25519` and the user added it to their GitHub account; origin remote uses `git@github.com:Amentinho/quota.git`). Custom fee schedule resolved: 1 HBAR fixed fee, denominated in HBAR not the token, collected by the operator account, `allCollectorsAreExempt: true` so treasury/retirement transfers aren't taxed.
+
+**Layer 1 token created.** `HEDERA_TOKEN_ID=0.0.10411251` (also in `.env`). https://hashscan.io/testnet/token/0.0.10411251 — maxSupply `3400000000` raw / `3,400,000.000` as HashScan renders it. Creation tx fee: 24.44346741 ℏ. Confirmed on-chain via HashScan and `hedera/verify-token.mjs`: adminKey, wipeKey, pauseKey, feeScheduleKey all absent (token and fee both immutable); supplyKey/kycKey/freezeKey all set to the operator key. Custom fee live: 1 ℏ fixed fee, collector `0.0.10323351` (operator), `allCollectorsAreExempt: true`.
