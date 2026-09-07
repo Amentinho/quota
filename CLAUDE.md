@@ -2,6 +2,8 @@
 
 ETHGlobal ETHOnline 2026, "Start from Scratch" track. Day 1: 2026-09-07. Submission ~2026-09-16.
 
+Local path: `/Users/andreaamenta/Desktop/quota` (not `~/Projects` — deliberately scaffolded on Desktop alongside the unrelated Virtusgreen repo).
+
 ## What this is
 
 Origin fraud in protected-designation food isn't forged certificates — it's volume. Bronte produces ~3,400 tonnes of PDO pistachio per harvest, biennially, yet "Bronte pistachio" sells worldwide year-round. Attestation can't catch this: you can always issue one more certificate.
@@ -137,7 +139,7 @@ Done:
 - Repo scaffolded locally: directory structure, MIT license, gitignore, this file, README.
 
 Next:
-- Push public GitHub repo (`gh repo create Amentinho/quota --public`).
+- Push public GitHub repo. `gh` is installed at `/usr/local/bin/gh` but is an x86_64 binary that fails with "bad CPU type in executable" on this arm64 Mac — same root cause as the broken Intel Homebrew. Per user instruction, do not try to fix via brew. User creates the repo in the browser; we add the remote and push.
 - Create the Layer 1 HTS token: name `QUOTA Bronte PDO Pistachio 2026`, symbol `QBRP26`, `maxSupply 3_400_000_000` grams, `decimals 3`, `FINITE`, `supplyKey`/`kycKey`/`freezeKey` only, custom fixed fee at creation, no admin/wipe/pause/feeSchedule keys.
 - Prove the invariant on testnet: mint to cap succeeds; mint 1 more fails (record exact status code/error string); burn 100,000 then try minting 1 again (record whether headroom reopens — expected yes, confirms the retire-don't-burn design above).
 - Confirm HashScan shows `3,400,000.000` display / `3400000000` raw maxSupply; record both links.
