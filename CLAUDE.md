@@ -139,10 +139,9 @@ Done:
 - Repo scaffolded locally: directory structure, MIT license, gitignore, this file, README.
 
 Next:
-- Push public GitHub repo. `gh` is installed at `/usr/local/bin/gh` but is an x86_64 binary that fails with "bad CPU type in executable" on this arm64 Mac — same root cause as the broken Intel Homebrew. Per user instruction, do not try to fix via brew. User creates the repo in the browser; we add the remote and push.
-- Create the Layer 1 HTS token: name `QUOTA Bronte PDO Pistachio 2026`, symbol `QBRP26`, `maxSupply 3_400_000_000` grams, `decimals 3`, `FINITE`, `supplyKey`/`kycKey`/`freezeKey` only, custom fixed fee at creation, no admin/wipe/pause/feeSchedule keys.
+- Run `hedera/create-token.mjs` once the user has pasted credentials into `.env` and reviewed the script (paused before execution, per user request). Creates the Layer 1 HTS token: name `QUOTA Bronte PDO Pistachio 2026`, symbol `QBRP26`, `maxSupply 3_400_000_000` grams, `decimals 3`, `FINITE`, `supplyKey`/`kycKey`/`freezeKey` all set to the operator key (day-1 simplification — see script comment), custom fixed fee of 1 HBAR per transfer collected by the operator account with `allCollectorsAreExempt: true`, no admin/wipe/pause/feeSchedule keys.
 - Prove the invariant on testnet: mint to cap succeeds; mint 1 more fails (record exact status code/error string); burn 100,000 then try minting 1 again (record whether headroom reopens — expected yes, confirms the retire-don't-burn design above).
 - Confirm HashScan shows `3,400,000.000` display / `3400000000` raw maxSupply; record both links.
 - Report HBAR cost per transaction.
 
-Open decision before token creation: custom fee schedule amount and fee-collector account (not yet specified).
+Resolved: repo is public and pushed to https://github.com/Amentinho/quota via SSH (gh CLI is broken on this machine — see above — so we generated a dedicated ed25519 key at `~/.ssh/id_ed25519` and the user added it to their GitHub account; origin remote uses `git@github.com:Amentinho/quota.git`). Custom fee schedule resolved: 1 HBAR fixed fee, denominated in HBAR not the token, collected by the operator account, `allCollectorsAreExempt: true` so treasury/retirement transfers aren't taxed.
