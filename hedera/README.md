@@ -16,24 +16,30 @@ node --env-file=.env hedera/4b-mint-one-more.mjs      # mint 1 more — expect r
 node --env-file=.env hedera/4c-burn-then-remint.mjs   # burn 100,000, then try minting 1 — the retire-vs-burn evidence
 ```
 
-**Retirement mechanism.** A retirement account has to be permanently unable to send anything out. Three approaches were tested against the live token — see CLAUDE.md ("Making retirement permanent") and the README for the full evidence and why two of them were rejected:
+**Retirement mechanism.** The security property that matters: a retirement account's key must not be a secret anyone has to trust us about, because an unverifiable "we deleted it" claim doesn't belong in a project about removing trust assumptions. Four approaches were tested against the live token — full evidence, status codes, and rejection reasons in CLAUDE.md ("Making retirement permanent") and the README:
 
 ```
-node --env-file=.env hedera/investigate-unspendable-key.mjs             # option 1, rejected: Hedera won't create an unsignable account (KEY_REQUIRED / INVALID_ADMIN_KEY)
-node --env-file=.env hedera/create-discarded-key-retirement-account.mjs # option 3, adopted: ephemeral key, used once for association, then discarded
-node --env-file=.env hedera/retire.mjs 50000                            # transfer <grams> from treasury into any retirement account (used for all three options)
+node --env-file=.env hedera/investigate-unspendable-key.mjs                  # rejected: Hedera won't create an unsignable account (KEY_REQUIRED / INVALID_ADMIN_KEY)
+node --env-file=.env hedera/investigate-post-association-unspendable.mjs     # rejected: same result rekeying an associated account via AccountUpdateTransaction
+node --env-file=.env hedera/create-deterministic-retirement-account.mjs      # adopted: key derived from sha256("QUOTA-RETIREMENT-" + tokenId), published, not secret
+node --env-file=.env hedera/retire.mjs <grams>                               # transfer grams from treasury into any retirement account
 ```
 
-Canonical retirement account: `0.0.10422087` (`HEDERA_RETIREMENT_ACCOUNT_ID` in `.env`) — no private key stored, by design.
+Canonical retirement account: `0.0.10422283` (`HEDERA_RETIREMENT_ACCOUNT_ID` in `.env`) — no private key stored; none needs protecting, since it's re-derivable by anyone from the token ID.
 
-The freeze-based approach (option 2) worked but was dropped for design reasons, not because it failed — kept in the repo as a proven, superseded prototype:
+Two approaches worked mechanically but were rejected anyway — kept in the repo as proven, superseded prototypes, not deleted:
 
 ```
-node --env-file=.env hedera/create-retirement-account.mjs      # creates the account, associates the token, grants KYC
-node --env-file=.env hedera/freeze-retirement-account.mjs      # freeze it — units can no longer leave
-node --env-file=.env hedera/prove-retirement-immutable.mjs     # attempt an outbound transfer — expect rejection
+node --env-file=.env hedera/create-retirement-account.mjs               # freeze-based: creates the account, associates, grants KYC
+node --env-file=.env hedera/freeze-retirement-account.mjs               # freeze it — rejected: bidirectional, reversible until frozen
+node --env-file=.env hedera/prove-retirement-immutable.mjs              # attempt outbound transfer — expect rejection
+
+node --env-file=.env hedera/create-discarded-key-retirement-account.mjs # discarded-key: works, rejected on principle — unverifiable claim
 ```
 
-That account (`0.0.10421765`, `HEDERA_DEPRECATED_FROZEN_RETIREMENT_ACCOUNT_ID`/`_KEY` in `.env`) still holds 50,000 grams, frozen — not migrated, since freezing already made it permanently immobile too, just via the mechanism the product no longer uses for new retirements.
+- `0.0.10421765` (`HEDERA_DEPRECATED_FROZEN_RETIREMENT_ACCOUNT_ID`/`_KEY` in `.env`) — 50,000 grams, frozen.
+- `0.0.10422087` (`HEDERA_DEPRECATED_DISCARDEDKEY_RETIREMENT_ACCOUNT_ID` in `.env`, no key stored) — 1 gram.
 
-Each consortium-season is meant to get its own retirement account under the adopted mechanism — see CLAUDE.md for what's still manual about that.
+Neither was migrated: both are already permanently immobile, just via mechanisms the product no longer uses for new retirements.
+
+Each consortium-season is meant to get its own retirement account, deterministically derived from that season's token ID — see CLAUDE.md for what's still manual about provisioning one.

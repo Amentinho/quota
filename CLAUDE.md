@@ -55,26 +55,43 @@ Mint 1 gram beyond cap (total supply already at maxSupply): status TOKEN_MAX_SUP
 
 ### Making retirement permanent
 
-A retirement account only works if a transfer out of it is impossible, not just against policy. Three options tested against the live token (`0.0.10411251`), in order of strength — status codes are measured, not assumed:
+**Security property, stated precisely:** the retirement account's key is not secret — it's deterministically derived from a published formula, so it provides no cryptographic protection. Retirement here means *any reversal is publicly visible and attributable to a specific known account*, not *reversal is physically impossible*. That distinction matters and should never be blurred in the README or pitch.
 
-1. **Unsignable account (empty KeyList, or impossible threshold key) — rejected by Hedera itself, before a transfer could even be attempted.** `hedera/investigate-unspendable-key.mjs`.
+Four things tested against the live token (`0.0.10411251`), in order — status codes measured, not assumed:
+
+1. **Unsignable account at creation (empty KeyList, or impossible threshold key) — rejected by Hedera itself.** `hedera/investigate-unspendable-key.mjs`.
    ```
-   AccountCreateTransaction, key = empty KeyList (0 members):            KEY_REQUIRED
+   AccountCreateTransaction, key = empty KeyList (0 members):              KEY_REQUIRED
    AccountCreateTransaction, key = KeyList(1 member), threshold 2 (2-of-1): INVALID_ADMIN_KEY
    ```
-   Hedera validates key satisfiability at creation. There is no way to construct a genuinely unsignable account on this network — this option is not available, full stop, not just "weaker."
 
-2. **Freeze with the token's `freezeKey` — works, rejected for design reasons.** `hedera/create-retirement-account.mjs` + `hedera/freeze-retirement-account.mjs` + `hedera/prove-retirement-immutable.mjs` (kept in the repo as a proven-but-superseded prototype; account `0.0.10421765`, 50,000 grams, frozen, `ACCOUNT_FROZEN_FOR_TOKEN` on outbound attempt). Rejected because freezing is bidirectional (the lever meant for suspending a compromised participant, not for retirement) and reversible right up until `TokenFreezeTransaction` is actually called — retirement should be final on arrival, not final because we remembered to freeze it. **Correction to a previous entry here**: this file previously stated as fact that a frozen account can't receive further transfers either. That was never actually tested — it was inferred from freeze semantics, not measured. It's moot now since freeze isn't the retirement mechanism, and we didn't go back to test it once option 3 worked; treat it as unverified if it resurfaces.
-
-3. **Ephemeral keypair, used once for the required association, then discarded — what's live now.** `hedera/create-discarded-key-retirement-account.mjs`. Retirement account `0.0.10422087`: created with a freshly generated key, that key signed exactly one transaction (`TokenAssociateTransaction` — Hedera always requires the account's own signature for this, no exception), then the key was never stored, written to a file, or printed; the last in-process reference was set to `null`. KYC-approved, received 1 gram, outbound attempt with no signature to provide:
+2. **Same two constructions via `AccountUpdateTransaction`, rekeying an already-associated account — also rejected.** `hedera/investigate-post-association-unspendable.mjs`. Tested specifically because option 1's constraint might only apply at creation, not update.
    ```
-   INVALID_SIGNATURE
+   AccountUpdateTransaction, new key = empty KeyList:              INVALID_ADMIN_KEY
+   AccountUpdateTransaction, new key = 2-of-1 impossible threshold: INVALID_ADMIN_KEY
    ```
-   Weaker than option 1 would have been — a trust claim (we say the key is gone), not a cryptographic proof (no key could ever have existed). Documented as such, not oversold.
+   Hedera enforces key satisfiability everywhere a key can be set. **There is no Hedera mechanism, at creation or after, for a genuinely unspendable account.** This is a protocol wall, not a workaround we missed — settle this permanently, don't re-investigate it in a future session.
 
-   Structural finding along the way: `setMaxAutomaticTokenAssociations` doesn't rescue this for a KYC-gated token. Auto-association only takes effect as part of a successful transfer; a transfer to an un-KYC'd account fails with `ACCOUNT_KYC_NOT_GRANTED_FOR_TOKEN`, and KYC can't be granted before association exists (`TOKEN_NOT_ASSOCIATED_TO_ACCOUNT`) — confirmed by first trying the auto-associate route, which deadlocked and left account `0.0.10422047` permanently stuck (unassociated, key already discarded — an accidental but honest demonstration of how final "discard" really is).
+3. **Freeze with the token's `freezeKey` — works, rejected on design grounds.** `hedera/create-retirement-account.mjs` + `hedera/freeze-retirement-account.mjs` + `hedera/prove-retirement-immutable.mjs` (kept as a proven-but-superseded prototype; account `0.0.10421765`, 50,000 grams, frozen, `ACCOUNT_FROZEN_FOR_TOKEN` on outbound attempt). Rejected because freezing is bidirectional (the lever meant for suspending a compromised participant) and reversible right up until `TokenFreezeTransaction` is actually called. **Correction to a previous entry here**: this file once stated as fact that a frozen account can't receive further transfers either. Never actually tested — inferred from freeze semantics, not measured. Moot now; treat as unverified if it resurfaces.
 
-Each consortium-season gets its own retirement account under this scheme — retired totals are then one mirror-node query away per season, no indexing needed.
+4. **Ephemeral keypair, used once for the required association, then discarded — built, then rejected on principle.** `hedera/create-discarded-key-retirement-account.mjs` (account `0.0.10422087`, kept as a superseded prototype). Worked mechanically: key signed exactly one `TokenAssociateTransaction`, then was never stored, written, or printed; outbound attempt with no signature failed with `INVALID_SIGNATURE`. Rejected anyway: "we discarded it" is a claim about a private process on one laptop, unverifiable by anyone else — exactly the kind of trust assumption this project exists to remove. Do not resurrect this approach; it was a mistake in judgment, not a technical failure, so it needs a decision override, not a retest, to come back.
+
+**Adopted: deterministic, published key.**
+```
+seed = sha256("QUOTA-RETIREMENT-" + tokenId)   // tokenId = "0.0.10411251" for this token
+key  = PrivateKey.fromBytesED25519(seed)
+```
+`hedera/create-deterministic-retirement-account.mjs`. Retirement account `0.0.10422283`. Verified, not just asserted, on two axes:
+- **The account really uses the derived key** — on-chain confirmation via mirror node: registered key `fd2149afe5e06e4ac09bf505e772cdab662d768ab257170af7454d73c5ede5f2` matches the raw public key from the derivation exactly.
+- **The key really is spendable, not just theoretically** — the script itself moves 1 gram out (signed with the reproduced key: `SUCCESS`) and back in (`SUCCESS`), demonstrating the residual risk concretely rather than asserting it.
+
+25,000 grams retired into it. Attacker capability: anyone reproducing the two-line derivation can sign a transfer out, same as we just did. Detection: any such transfer is a public, permanent Hedera transaction against one specific known account that legitimate flows never draw from; today that means the mirror node, and once Layer 2's subgraph exists, a direct queryable anomaly. Same "prevention where we can, detection where we can't" framing as Trust boundaries below — this is a second instance of it, not a one-off.
+
+No private key is stored in `.env` for this account — there's nothing to protect; it's re-derivable on demand from the token ID by anyone, including future sessions.
+
+**Structural finding, confirmed and general, not an incident to be filed away:** `setMaxAutomaticTokenAssociations` cannot bootstrap an account into holding a KYC-gated token. Auto-association only takes effect as a side effect of a *successful* transfer; a transfer to a not-yet-KYC'd account fails first (`ACCOUNT_KYC_NOT_GRANTED_FOR_TOKEN`), and KYC can never be granted before an association exists (`TOKEN_NOT_ASSOCIATED_TO_ACCOUNT`). For any token with a `kycKey` — including future consortium tokens, not just this one — there is no way to get an account holding it without that account signing an explicit `TokenAssociateTransaction` at least once. This constraint shapes every future script that creates an account meant to hold QUOTA units. Found via an account (`0.0.10422047`) permanently stranded by a first attempt that assumed auto-association would work — unassociated, key already discarded, unrecoverable.
+
+Each consortium-season gets its own retirement account under this scheme (the derivation includes the token ID, so a new season's token deterministically produces a different, independently reproducible account) — retired totals are then one mirror-node query away per season, no indexing needed.
 
 ### Trust boundaries
 
@@ -102,7 +119,7 @@ One HTS fungible token per consortium-season.
 - **No `adminKey`, no `wipeKey`, no `pauseKey`** — fully immutable token, no way to change terms after creation
 - Custom fixed fee (consortium levy) set **at creation time**, no `feeScheduleKey` — the fee is immutable too, since without an admin key there's no way to add a fee-schedule key later
 - `kycKey` — gates which supply-chain participants may hold units
-- `freezeKey` — suspends a compromised participant. Not used for retirement (see Making retirement permanent) — a discarded key does that job instead, so freeze stays dedicated to its real purpose
+- `freezeKey` — suspends a compromised participant. Not used for retirement (see Making retirement permanent) — retirement uses a deterministic, published key instead, so freeze stays dedicated to its real purpose
 - The cap is enforced by Hedera consensus, not our code. Do not reimplement it in Solidity.
 
 **Layer 2 — public accountability, Ethereum Sepolia.**
@@ -181,8 +198,11 @@ quota/
   - Mint to cap (3,400,000,000 grams): status `SUCCESS`, resulting total supply equals cap exactly.
   - Mint 1 gram beyond cap: rejected, status `TOKEN_MAX_SUPPLY_REACHED`.
   - Burn 100,000 grams, then mint 1 gram again: both status `SUCCESS` — burning reopened mint headroom. This is the empirical basis for Retire, don't burn above.
-- Retirement mechanism, built and verified against the live token — see Making retirement permanent above for the full evidence and rejected alternatives. Canonical retirement account: `HEDERA_RETIREMENT_ACCOUNT_ID=0.0.10422087` (in `.env`; no key to store — it was discarded by design), created with a keypair used once for association then dropped, KYC-approved, associated with `0.0.10411251`. Holds 1 gram (the proof transfer); `hedera/retire.mjs` transfers further amounts into it. Outbound transfer with no signature to provide: rejected, `INVALID_SIGNATURE`. Balance: `https://testnet.mirrornode.hedera.com/api/v1/tokens/0.0.10411251/balances?account.id=0.0.10422087`.
-  - Deprecated prototype (superseded, not deleted — kept for the historical record and because it's still holding retired supply): `0.0.10421765` (`HEDERA_DEPRECATED_FROZEN_RETIREMENT_ACCOUNT_ID`/`_KEY` in `.env`), holds 50,000 grams, frozen via `freezeKey`. Frozen means it's stuck permanently too, just via a mechanism we no longer use for new retirements.
+- Retirement mechanism, built and verified against the live token — see Making retirement permanent above for the full evidence, all four tested approaches, and why three were rejected. Canonical retirement account: `HEDERA_RETIREMENT_ACCOUNT_ID=0.0.10422283` (in `.env`; no key stored — it's re-derivable on demand from `sha256("QUOTA-RETIREMENT-" + tokenId)`, not a secret). Holds 25,000 grams. On-chain key confirmed via mirror node to match the derivation exactly; spendability proven (not just claimed) by an actual round-trip transfer.
+  - Deprecated prototypes (superseded, not deleted — historical record, and still holding retired supply):
+    - `0.0.10421765` (`HEDERA_DEPRECATED_FROZEN_RETIREMENT_ACCOUNT_ID`/`_KEY` in `.env`) — 50,000 grams, frozen via `freezeKey`. The freeze-based approach.
+    - `0.0.10422087` (`HEDERA_DEPRECATED_DISCARDEDKEY_RETIREMENT_ACCOUNT_ID` in `.env`, no key — it really was discarded) — 1 gram, the discarded-key approach, rejected on principle (unverifiable claim) rather than for a technical flaw.
+  - Incidental leftover accounts from investigation, no ongoing purpose, not tracked in `.env`: `0.0.10422047` (permanently stranded — unassociated, key discarded, see the auto-association/KYC finding below), `0.0.10422250` (normal spendable key, holds 1 gram, created while testing whether `AccountUpdateTransaction` could rekey to something unspendable — it can't).
 
 ### Not yet built
 - Layer 2: `QuotaAnchor.sol` (`contracts/` is currently just a placeholder).
@@ -198,10 +218,11 @@ quota/
 - Hardhat 3 requires ESM (`"type": "module"`) and a `hardhat.config.ts` using `defineConfig` — a `.js`/`.mjs` config fails with `HHE3`.
 - `gh` CLI is broken on this machine (wrong CPU architecture); git operations go over SSH with a dedicated key, not HTTPS/gh.
 - Without an `adminKey`, the token's `kycKey`/`freezeKey`/fee schedule can never be changed after creation — deliberate (immutability is the point), but any mistake in those parameters at creation time is permanent for this token.
-- Hedera validates account-key satisfiability at creation: an empty `KeyList` fails with `KEY_REQUIRED`, a `KeyList` whose threshold exceeds its member count fails with `INVALID_ADMIN_KEY`. You cannot create a genuinely unsignable account.
-- `TokenGrantKycTransaction` requires the target account to already be associated with the token (`TOKEN_NOT_ASSOCIATED_TO_ACCOUNT` otherwise), and `TokenAssociateTransaction` always requires the account's own signature — no exception, even with `setMaxAutomaticTokenAssociations` set. Auto-association only fires as a side effect of a *successful* transfer, and a transfer to a not-yet-KYC'd account fails first (`ACCOUNT_KYC_NOT_GRANTED_FOR_TOKEN`), so for a KYC-gated token there's no way to bootstrap an account into holding it without signing an explicit association at least once.
-- `TokenFreezeTransaction` blocks transfers in *both* directions, not just outbound — noted for the record from the now-superseded freeze-based retirement prototype; not verified by us directly (see Making retirement permanent) and not relevant to the current retirement mechanism.
+- Hedera validates account-key satisfiability everywhere a key can be set, not just at creation: an empty `KeyList` fails with `KEY_REQUIRED`, a `KeyList` whose threshold exceeds its member count fails with `INVALID_ADMIN_KEY` — on `AccountCreateTransaction` and on `AccountUpdateTransaction` alike. Settled: there is no way to construct a genuinely unspendable account on Hedera. Don't re-investigate this.
+- `TokenGrantKycTransaction` requires the target account to already be associated with the token (`TOKEN_NOT_ASSOCIATED_TO_ACCOUNT` otherwise), and `TokenAssociateTransaction` always requires the account's own signature — no exception, even with `setMaxAutomaticTokenAssociations` set. Auto-association only fires as a side effect of a *successful* transfer, and a transfer to a not-yet-KYC'd account fails first (`ACCOUNT_KYC_NOT_GRANTED_FOR_TOKEN`), so for a KYC-gated token there's no way to bootstrap an account into holding it without signing an explicit association at least once. Applies to every account this project ever creates to hold QUOTA units, not just retirement accounts.
+- `TokenFreezeTransaction` blocks transfers in *both* directions, not just outbound — noted for the record from the now-superseded freeze-based retirement prototype; not verified by us directly and not relevant to the current retirement mechanism.
+- "We generated a key and discarded it" is not an acceptable design for anything user-facing in this project, even though it works mechanically — it reintroduces exactly the kind of unverifiable trust claim the product exists to remove. Prefer deterministic/published or otherwise independently verifiable constructions.
 
 ### Open decisions
 - When (or whether, for the testnet build) to split `supplyKey`/`kycKey`/`freezeKey` into separate keys instead of reusing the operator key.
-- How per-season retirement-account provisioning gets triggered in the actual product: one discarded-key retirement account per consortium-season is the decided design (see Making retirement permanent), but nothing yet automates creating one when a season opens — today it's a manually run script.
+- How per-season retirement-account provisioning gets triggered in the actual product: one deterministic retirement account per consortium-season, keyed off the season's token ID, is the decided design (see Making retirement permanent), but nothing yet automates creating one when a season opens — today it's a manually run script.
