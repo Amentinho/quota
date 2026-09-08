@@ -20,8 +20,14 @@ await contract.waitForDeployment();
 const address = await contract.getAddress();
 const deployTx = contract.deploymentTransaction();
 
+const deployReceipt = await deployTx.wait();
+
 console.log("QuotaAnchor deployed:", address);
 console.log("Deployment tx hash:", deployTx.hash);
+console.log("Deployment block:", deployReceipt.blockNumber);
 
-appendFileSync(new URL("../.env", import.meta.url), `QUOTA_ANCHOR_ADDRESS=${address}\n`);
-console.log("Address written to .env as QUOTA_ANCHOR_ADDRESS");
+appendFileSync(
+  new URL("../.env", import.meta.url),
+  `QUOTA_ANCHOR_ADDRESS=${address}\nQUOTA_ANCHOR_DEPLOY_BLOCK=${deployReceipt.blockNumber}\n`,
+);
+console.log("Address and deploy block written to .env");
