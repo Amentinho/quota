@@ -9,9 +9,9 @@ dataSources:
     name: QuotaAnchor
     network: sepolia
     source:
-      address: "0xec7B4666c06dB283Cf5f58Bab7dEDFC522092832"
+      address: "0x39F0Fded796cB5323048a15b907CcE38979EDa2c"
       abi: QuotaAnchor
-      startBlock: 11662163
+      startBlock: 11662229
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
