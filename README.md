@@ -143,12 +143,86 @@ No one revoked anything, closed the season, or touched the contract between (a) 
 
 **A note on the expiry window itself:** the proof above used a 30-minute expiry so all three proofs, including waiting past expiry, could run inside one session. The mechanism is exactly the same regardless of duration — the season was re-registered afterward with a 60-day expiry (covering the rest of the build), and in production this would be set to the real harvest-close date. Nothing about *how* expiry gates minting depends on how far out it's set.
 
+## The subgraph: composable across consortia, and an actual detector
+
+One shared GraphQL schema, deployed to Subgraph Studio (project slug `quota`) on Ethereum Sepolia. The composability claim: `Consortium`, `Season`, `Participant`, `Lot`, `Transformation`, and `Retirement` are all reachable from a `Consortium`, and nothing in the schema is Bronte-specific — the same query works for any consortium, with only the id changing. Bronte is the only consortium with real data today; the schema doesn't assume that, and we haven't padded it with fabricated data for other consortia to make the claim look bigger than it is.
+
+**How Hedera mirror-node data gets into a subgraph at all — a design decision, not an afterthought.** Subgraph mappings are deterministic, sandboxed WASM: they react to events on the indexed chain and cannot make outbound HTTP calls to an arbitrary REST API. There's no way for this subgraph to reach Hedera's mirror node directly. So the actual reconciliation happens off-chain, in `scripts/relayer.mjs`'s `reconcile-mints` command: it fetches the full Hedera mint history for the token, fetches the full `UnitsMinted` anchor history from every `QuotaAnchor` address ever deployed, and anchors a new `UnauthorizedMintDetected` event for any Hedera mint with no matching anchor anywhere. The subgraph indexes *that* event — it never talks to Hedera. The off-chain reconciler is the actual detector; the subgraph is what makes its findings queryable. (Same story, same code path, for `RetirementOutflowDetected` — the retirement tripwire from earlier in this build.)
+
+**Two real bugs, found by running the reconciler, not by inspection.** First run compared Hedera's mint history against only the *current* `QuotaAnchor` address — every mint anchored against a now-superseded address (this project redeployed the contract several times over the build, each time for a real reason: closing the ENS TODO, adding the detector event, fixing a missing `seasonId`) came back as a false "unauthorized." Fixed by checking every deployed address's history, which is the correct design regardless of redeploy count. Second run *still* produced false positives: the transaction-ID normalizer used chained non-global `.replace()` calls, which only touch the first `.` in a `0.0.x` account ID — the same mistake as an earlier HashScan URL bug in this project, this time in a new place. Rewrote it as an explicit regex, verified independently, then reran.
+
+**Clean result, verified:** minted 1 gram legitimately through the relayer (anchored), then minted 1 gram directly via Hedera SDK bypassing the relayer entirely (`scripts/mint-bypassing-relayer.mjs` — a permanent testing tool, not a throwaway), simulating a genuine unauthorized mint. The reconciler flagged exactly the bypass mint and correctly recognized every legitimately-anchored mint, including ones anchored against three different historical contract addresses.
+
+### Three queries against the live endpoint
+
+Deployed subgraph endpoint: *(added once deployed — Studio deploy key needed, see Status)*.
+
+**1. Season lifecycle — the composability claim itself.** Swap `consortiumId` for any consortium's id and the shape of the response doesn't change:
+```graphql
+query SeasonLifecycle {
+  consortium(id: "0x15b5c6738cfb5e2b01ba96ceeaa44f6d9c1f657b4f24f5df918008069f036c4c") {
+    id
+    seasons {
+      id
+      year
+      hederaTokenId
+      capGrams
+      mintedGrams
+      retiredGrams
+      inCirculationGrams
+      utilisationBp
+    }
+  }
+}
+```
+
+**2. Fraud findings — both detector paths, for one consortium.**
+```graphql
+query FraudFindings {
+  consortium(id: "0x15b5c6738cfb5e2b01ba96ceeaa44f6d9c1f657b4f24f5df918008069f036c4c") {
+    seasons {
+      id
+      unauthorizedMints {
+        grams
+        hederaTxId
+        blockTimestamp
+        transactionHash
+      }
+      unauthorizedRetirementOutflows {
+        grams
+        hederaTxId
+        blockTimestamp
+      }
+    }
+  }
+}
+```
+
+**3. Retirement traceability — lots and what's been retired against them.**
+```graphql
+query RetirementsBySeason {
+  season(id: "0xa4baff5b7d3e9ce47e3883640443c4f96c3c9d5ab41ef2d6fb111aa877680d46") {
+    id
+    lots {
+      id
+      lotRef
+      totalRetiredGrams
+      retirements {
+        grams
+        hederaTxId
+        blockTimestamp
+      }
+    }
+  }
+}
+```
+
 ## Architecture
 
 Three layers, deliberately kept separate:
 
 - **Layer 1 — the asset**, on Hedera testnet. One HTS fungible token per consortium-season, `FINITE` supply, `maxSupply` set once in grams at creation, no admin/wipe/pause keys. The cap is enforced by Hedera consensus, not by our code. The token carries a fixed transfer fee denominated in HBAR (never in origin units — a fee paid in grams would destroy supply on every transfer, which is exactly the conservation law this token exists to prove). There is no `feeScheduleKey`, so the fee is immutable for the same reason the cap is: nothing about the token's terms can move after creation. On testnet the fee collector is our own operator account for simplicity; in a real consortium deployment it would be the consortium's own treasury account.
-- **Layer 2 — public accountability**, on Ethereum Sepolia. `QuotaAnchor.sol` records mint/transfer/transform/retire events for indexing. Deployed and verified: [`0xD844dF6A6A15ce24dB99b65A45311070506F8A9B`](https://sepolia.etherscan.io/address/0xD844dF6A6A15ce24dB99b65A45311070506F8A9B#code). It stores almost nothing — the only state is the immutable `relayer` address allowed to call it, and one small struct per season recording where to look on ENS; everything else is emit-only. The cap it records at season open is read live from the resolver at mint-anchor time, not supplied by whoever calls the contract — see "ENS v2: making it load-bearing" below.
+- **Layer 2 — public accountability**, on Ethereum Sepolia. `QuotaAnchor.sol` records mint/transfer/transform/retire events for indexing. Deployed and verified: [`0x39F0Fded796cB5323048a15b907CcE38979EDa2c`](https://sepolia.etherscan.io/address/0x39F0Fded796cB5323048a15b907CcE38979EDa2c#code). It stores almost nothing — the only state is the immutable `relayer` address allowed to call it, and one small struct per season recording where to look on ENS; everything else is emit-only. The cap it records at season open is read live from the resolver at mint-anchor time, not supplied by whoever calls the contract — see "ENS v2: making it load-bearing" below.
 - **Layer 3 — ENS v2 on Sepolia**, load-bearing, not decoration. `quota.eth` → `bronte.quota.eth` → `2026.bronte.quota.eth`, all live on Sepolia testnet. Season subname expiry is the mint window. Enhanced Access Control scopes a `MINTER` role to a single season. Resolver text records are the canonical cap and yield-ratio parameters, read on-chain by the contract itself. Participant subnames are non-transferable and gate KYC. Full detail and the three-part proof below.
 
 Full design detail lives in [`CLAUDE.md`](CLAUDE.md).
@@ -170,7 +244,9 @@ The same framing applies to retirement-account outflows (see "Making retirement 
 
 ## Status
 
-All three layers are implemented and verified on testnet. Layer 1: the Hedera asset, its core invariant, and the retirement mechanism. Layer 2: `QuotaAnchor.sol` deployed and verified on Sepolia, reading the cap live from ENS. Layer 3: `quota.eth` → `bronte.quota.eth` → `2026.bronte.quota.eth` registered and load-bearing, with the kill test proven three ways above. The subgraph detector is not yet implemented — everything it would reconcile against is live and anchored, but the reconciliation itself isn't built. See [`CLAUDE.md`](CLAUDE.md) for the current build breakdown.
+All three layers are implemented and verified on testnet. Layer 1: the Hedera asset, its core invariant, and the retirement mechanism. Layer 2: `QuotaAnchor.sol` deployed and verified on Sepolia, reading the cap live from ENS. Layer 3: `quota.eth` → `bronte.quota.eth` → `2026.bronte.quota.eth` registered and load-bearing, with the kill test proven three ways above.
+
+The subgraph's schema and mappings are written, and build clean (`graph codegen` / `graph build`). The mint-reconciliation detector is built, run, and verified against a real bypass mint — see above. What's outstanding is the actual `graph deploy` to Subgraph Studio: that requires a deploy key created by connecting a wallet in Studio's browser UI, which is not something this session can do on its own. See [`CLAUDE.md`](CLAUDE.md) for the current build breakdown.
 
 ## License
 
