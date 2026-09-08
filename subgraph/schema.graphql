@@ -1,0 +1,107 @@
+"""
+One shared schema across every consortium QUOTA anchors. The composability
+claim: the same query shape works for any consortium, with only the id
+changing -- nothing here is Bronte-specific, even though Bronte is the only
+consortium with real data today.
+"""
+type Consortium @entity {
+  id: Bytes! # consortiumId
+  seasons: [Season!]! @derivedFrom(field: "consortium")
+  participants: [Participant!]! @derivedFrom(field: "consortium")
+}
+
+type Season @entity {
+  id: Bytes! # seasonId
+  consortium: Consortium!
+  year: BigInt!
+  hederaTokenId: String!
+  ensNode: Bytes!
+
+  # Canonical parameter, read live from ENS by QuotaAnchor at openSeason --
+  # this schema stores what the contract read, not a separate source of truth.
+  capGrams: BigInt!
+
+  # Derived fields, computed in mappings on every relevant event, not at
+  # query time -- so they're plain fields, not @derivedFrom aggregations.
+  mintedGrams: BigInt!
+  retiredGrams: BigInt!
+  inCirculationGrams: BigInt! # mintedGrams - retiredGrams
+  utilisationBp: BigInt! # floor(mintedGrams * 10000 / capGrams)
+
+  lots: [Lot!]! @derivedFrom(field: "season")
+  retirements: [Retirement!]! @derivedFrom(field: "season")
+  transformationsAsInput: [Transformation!]! @derivedFrom(field: "inputSeason")
+  transformationsAsOutput: [Transformation!]! @derivedFrom(field: "outputSeason")
+  unauthorizedMints: [UnauthorizedMint!]! @derivedFrom(field: "season")
+}
+
+type Participant @entity {
+  id: Bytes! # address
+  consortium: Consortium!
+  role: String!
+  registeredAt: BigInt!
+  transactionHash: Bytes!
+}
+
+"""
+A lot aggregates every retirement recorded against the same lotRef within a
+season -- a lotRef can be retired against more than once as it sells through.
+"""
+type Lot @entity {
+  id: String! # `${seasonId}-${lotRef}`
+  season: Season!
+  lotRef: String!
+  totalRetiredGrams: BigInt!
+  retirements: [Retirement!]! @derivedFrom(field: "lot")
+}
+
+type Retirement @entity(immutable: true) {
+  id: Bytes! # tx hash + log index
+  season: Season!
+  lot: Lot!
+  grams: BigInt!
+  hederaTxId: String!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type Transformation @entity(immutable: true) {
+  id: Bytes! # tx hash + log index
+  inputSeason: Season!
+  inputGrams: BigInt!
+  outputSeason: Season!
+  outputGrams: BigInt!
+  productType: String!
+  yieldBp: Int!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+"""
+A Hedera mint transaction with no matching UnitsMinted anchor event.
+Anchored by an off-chain reconciler (not this subgraph -- subgraph mappings
+can't call the Hedera mirror node) that compares full mirror-node mint
+history against this contract's own anchor history. See CLAUDE.md.
+"""
+type UnauthorizedMint @entity(immutable: true) {
+  id: Bytes! # tx hash + log index
+  season: Season!
+  grams: BigInt!
+  hederaTxId: String!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+"""
+A retirement account paid out grams it should only ever have received.
+Same bridging story as UnauthorizedMint, for the retirement side --
+see the relayer's checkRetirementTripwire and CLAUDE.md.
+"""
+type UnauthorizedRetirementOutflow @entity(immutable: true) {
+  id: Bytes! # tx hash + log index
+  season: Season!
+  grams: BigInt!
+  hederaTxId: String!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}

@@ -47,6 +47,7 @@ contract QuotaAnchor {
     mapping(bytes32 => SeasonEnsConfig) public seasonEns;
 
     event SeasonOpened(
+        bytes32 indexed seasonId,
         bytes32 indexed consortiumId,
         uint256 year,
         uint256 capGrams,
@@ -113,7 +114,7 @@ contract QuotaAnchor {
         uint256 capGrams = _parseUint(IEnsTextResolver(resolver).text(node, "quota.cap.g"));
         require(capGrams > 0, "QuotaAnchor: quota.cap.g not set on resolver");
 
-        emit SeasonOpened(consortiumId, year, capGrams, hederaTokenId, node);
+        emit SeasonOpened(seasonId, consortiumId, year, capGrams, hederaTokenId, node);
     }
 
     function recordMint(

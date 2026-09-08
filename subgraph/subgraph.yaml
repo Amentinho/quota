@@ -1,0 +1,46 @@
+specVersion: 1.0.0
+description: >-
+  QUOTA -- one shared schema indexing every consortium's origin-unit
+  lifecycle on Ethereum Sepolia, anchoring Hedera-side asset events.
+schema:
+  file: ./schema.graphql
+dataSources:
+  - kind: ethereum
+    name: QuotaAnchor
+    network: sepolia
+    source:
+      address: "0xec7B4666c06dB283Cf5f58Bab7dEDFC522092832"
+      abi: QuotaAnchor
+      startBlock: 11662163
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - Consortium
+        - Season
+        - Participant
+        - Lot
+        - Retirement
+        - Transformation
+        - UnauthorizedMint
+        - UnauthorizedRetirementOutflow
+      abis:
+        - name: QuotaAnchor
+          file: ./abis/QuotaAnchor.json
+      eventHandlers:
+        - event: SeasonOpened(indexed bytes32,indexed bytes32,uint256,uint256,string,bytes32)
+          handler: handleSeasonOpened
+        - event: UnitsMinted(indexed bytes32,indexed address,uint256,string)
+          handler: handleUnitsMinted
+        - event: Transformed(indexed bytes32,uint256,indexed bytes32,uint256,string,uint16)
+          handler: handleTransformed
+        - event: UnitsRetired(indexed bytes32,uint256,string,string)
+          handler: handleUnitsRetired
+        - event: ParticipantRegistered(indexed bytes32,indexed address,string)
+          handler: handleParticipantRegistered
+        - event: UnauthorizedMintDetected(indexed bytes32,uint256,string)
+          handler: handleUnauthorizedMintDetected
+        - event: RetirementOutflowDetected(indexed bytes32,uint256,string)
+          handler: handleRetirementOutflowDetected
+      file: ./src/mapping.ts
