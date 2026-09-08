@@ -107,7 +107,7 @@ quota.eth                    — consortium root
 
 Registration on this ENSv2 beta pays in a mock ERC20 (`MockDAI`), not ETH — calling `getRegisterPrice` with `paymentToken = address(0)` reverts with `PaymentTokenNotSupported`. The mock token has a public `mint()` (it's explicitly a testnet faucet token), so registration is mint → approve → commit → wait 60s → register.
 
-Expiry gating is asymmetric, and this determines how `QuotaAnchor` checks a season, not just a curiosity: `getResolver(label)` and `getSubregistry(label)` (looked up by string label on the parent registry) both return the zero address once a name is expired — confirmed directly in the verified `PermissionedRegistry` source, not assumed. But raw `hasRoles(tokenId, role, account)` is **not** expiry-gated on its own; role bits stay in storage regardless of expiry. So "does this name resolve" and "does this address hold a role" are genuinely two different checks, and `QuotaAnchor` makes both, in that order — which is exactly why proof (b) and proof (c) below are distinct failures, not the same one twice.
+Expiry gating uses two different mechanisms, and getting this right mattered for how `QuotaAnchor` checks a season. `getResolver(label)`/`getSubregistry(label)` (string-label lookups) check expiry directly and return the zero address once a name is expired. Role checks work differently but land in the same place: `_constructResource()` computes the resource ID used for `hasRoles()` as `eacVersionId` normally, but `eacVersionId + 1` once expired — a version nothing has ever been granted a role on. So `hasRoles()` also returns `false` for everyone post-expiry, without any role data actually being deleted; expiry just shifts which resource future lookups land on. (Our first read of the source concluded `hasRoles` *wasn't* expiry-gated — wrong, from stopping one function short. The empirical proof below caught it: `hasRoles` returned `false` after expiry when it should have still been `true` had our first reading been correct. Corrected before it reached this file for good, not after.) Both checks are still made separately in the contract, not collapsed into one — they're different mechanisms even though they agree at expiry, and checking resolution explicitly keeps the contract's intent legible rather than relying on an indirect version-shift side effect.
 
 **Non-transferable participant subnames**, confirmed against source rather than assumed: `PermissionedRegistry`'s transfer hook reverts with `TransferDisallowed` unless the *current owner* holds `ROLE_CAN_TRANSFER_ADMIN` on their own token. `rossi.bronte.quota.eth` was registered without that role — no extra code needed, just omitting one bit at registration makes the name genuinely non-transferable at the protocol level.
 
@@ -132,10 +132,14 @@ This is the relayer's own off-chain check catching it before anything reaches Se
 
 **(c) Past expiry, mint fails with nobody having done anything.**
 
-For this to isolate expiry specifically — rather than repeat proof (b) — the MINTER role was re-granted first, so the *only* difference from proof (a) is elapsed time, not role state:
+For this to isolate expiry specifically — rather than repeat proof (b) — the MINTER role was re-granted first, so the *only* difference from proof (a) is elapsed time, not role state. Waited for real wall-clock time to pass the season's actual expiry, then ran the identical command:
 ```
-[filled in after natural expiry — see CLAUDE.md if this line is still here]
+REFUSED: "2026.bronte.quota.eth" does not resolve (expired or unregistered).
+No transaction sent.
 ```
+A different message than proof (b) — confirming this is genuinely the resolution check firing, not the role check again. Independently confirmed on-chain afterward, not just trusted from the relayer's own output: `getResolver("2026")` on bronte's registry now returns the zero address.
+
+No one revoked anything, closed the season, or touched the contract between (a) and (c). Time passed, and the authority to mint stopped existing.
 
 ## Architecture
 
