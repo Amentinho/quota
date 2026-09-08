@@ -40,6 +40,20 @@ For reference, the rejection at the cap itself behaves exactly as expected:
 Mint 1 gram beyond cap (total supply already at maxSupply): status TOKEN_MAX_SUPPLY_REACHED
 ```
 
+Retired units aren't removed from `totalSupply` — they're moved into a dedicated retirement account and then permanently immobilized: the account is frozen with the token's `freezeKey`, so nothing can ever move out of it again, in either direction. This is the same mechanism carbon credits and renewable energy Guarantees of Origin use to retire credits — a retired credit isn't deleted, it's placed in a registry account that can only ever receive, never spend.
+
+Proven, not assumed, against the live retirement account (`0.0.10421765`, holding 50,000 grams on token `0.0.10411251`):
+
+```
+Transfer 1 gram out of the frozen retirement account: status ACCOUNT_FROZEN_FOR_TOKEN
+```
+
+The retirement account's balance is public and independently verifiable through Hedera's mirror node, with no need to trust our own reporting of it:
+
+```
+https://testnet.mirrornode.hedera.com/api/v1/tokens/0.0.10411251/balances?account.id=0.0.10421765
+```
+
 ## Architecture
 
 Three layers, deliberately kept separate:
@@ -63,7 +77,7 @@ One limitation we want to be explicit about: the Hedera account holding the toke
 
 ## Status
 
-Layer 1 — the Hedera asset and its core invariant — is implemented and verified on testnet, including the retire-vs-burn evidence above. Layers 2 (the Sepolia accountability contract) and 3 (the ENS v2 policy layer) are not yet implemented. See [`CLAUDE.md`](CLAUDE.md) for the current build breakdown.
+Layer 1 — the Hedera asset, its core invariant, and the retirement mechanism — is implemented and verified on testnet. Layers 2 (the Sepolia accountability contract) and 3 (the ENS v2 policy layer) are not yet implemented. See [`CLAUDE.md`](CLAUDE.md) for the current build breakdown.
 
 ## License
 

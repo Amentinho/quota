@@ -46,7 +46,7 @@ Fix: **the product never calls `TokenBurnTransaction`.**
 - The retirement account's balance (readable from the mirror node) is the public "consumed" figure.
 - This mirrors how carbon credits and renewable Guarantees of Origin are actually retired.
 - Transformation: input units are **retired**, not burned. Derived units are minted on a **separate token** whose `maxSupply` = `input_cap * yield_bp / 10000`, floored.
-- The retirement-account + freeze flow itself is not yet implemented — see Status.
+- Built and verified against the live token — see Status. Retirement account `0.0.10421765` holds 50,000 grams and is frozen on `0.0.10411251`; attempting to move a unit back out is rejected with `ACCOUNT_FROZEN_FOR_TOKEN`. The freeze blocks transfers in both directions, so a frozen retirement account can't receive further retirements either without an explicit unfreeze first — see Open decisions for what that implies about the season boundary.
 
 For reference, minting past the cap in the first place is rejected outright:
 ```
@@ -158,13 +158,14 @@ quota/
   - Mint to cap (3,400,000,000 grams): status `SUCCESS`, resulting total supply equals cap exactly.
   - Mint 1 gram beyond cap: rejected, status `TOKEN_MAX_SUPPLY_REACHED`.
   - Burn 100,000 grams, then mint 1 gram again: both status `SUCCESS` — burning reopened mint headroom. This is the empirical basis for Retire, don't burn above.
+- Retirement mechanism, built and verified against the live token. Retirement account `0.0.10421765` (own key, in `.env` as `HEDERA_RETIREMENT_ACCOUNT_ID`/`HEDERA_RETIREMENT_ACCOUNT_KEY`, gitignored) created, associated with `0.0.10411251`, and KYC-approved. 50,000 grams transferred from treasury (`hedera/retire.mjs`); `totalSupply` confirmed unchanged before/after (3,399,900,001 both times — transfers don't touch supply, unlike burn). Account then frozen with the token's `freezeKey`. Attempting to move 1 gram back out afterward: rejected, status `ACCOUNT_FROZEN_FOR_TOKEN`. Balance independently verifiable via the mirror node: `https://testnet.mirrornode.hedera.com/api/v1/tokens/0.0.10411251/balances?account.id=0.0.10421765`.
 
 ### Not yet built
 - Layer 2: `QuotaAnchor.sol` (`contracts/` is currently just a placeholder).
 - Layer 3: ENS subname registration, EAC role grants, resolver text records (`ens/` is currently just a placeholder).
 - Subgraph schema and mappings (`subgraph/` is currently just a placeholder).
 - Relayer script that binds a Hedera mint call to ENS state before executing it.
-- The actual retirement-account + freeze-lock flow described in Retire, don't burn — proven necessary, not yet implemented.
+- Transformation flow (input units retired, derived units minted on a separate token) — not yet implemented; the retirement primitive it depends on is now built.
 - Distinct `supplyKey`/`kycKey`/`freezeKey` — currently all one operator key; a real consortium deployment would split these so a certifier can hold a scoped minting role without also controlling freeze/KYC.
 - Dashboard app, fraud-gap radar script, seed data for multiple consortia.
 
@@ -173,6 +174,8 @@ quota/
 - Hardhat 3 requires ESM (`"type": "module"`) and a `hardhat.config.ts` using `defineConfig` — a `.js`/`.mjs` config fails with `HHE3`.
 - `gh` CLI is broken on this machine (wrong CPU architecture); git operations go over SSH with a dedicated key, not HTTPS/gh.
 - Without an `adminKey`, the token's `kycKey`/`freezeKey`/fee schedule can never be changed after creation — deliberate (immutability is the point), but any mistake in those parameters at creation time is permanent for this token.
+- `TokenFreezeTransaction` blocks transfers in *both* directions, not just outbound. A frozen retirement account can't receive further retirements either — `retire.mjs` against an already-frozen account will fail, not silently succeed.
 
 ### Open decisions
 - When (or whether, for the testnet build) to split `supplyKey`/`kycKey`/`freezeKey` into separate keys instead of reusing the operator key.
+- How retirement accounts map to season boundaries: reuse one retirement account per season (unfreeze with `freezeKey`, transfer, refreeze, repeat) vs. freeze permanently after each retirement and mint/use a fresh retirement account for the next one. Current testnet account (`0.0.10421765`) is frozen after a single retirement and hasn't been unfrozen since.
