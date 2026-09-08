@@ -20,10 +20,17 @@ const artifact = JSON.parse(
 );
 const anchor = new ethers.Contract(process.env.QUOTA_ANCHOR_ADDRESS, artifact.abi, wallet);
 
+const registryAbi = JSON.parse(
+  readFileSync(new URL("../ens/abi/PermissionedRegistry.abi.json", import.meta.url)),
+);
+const bronteRegistry = new ethers.Contract(process.env.ENS_BRONTE_REGISTRY_ADDRESS, registryAbi, provider);
+
 // Known today because there's exactly one consortium and one season. Becomes
-// a real lookup once Layer 3 (ENS) exists and there's more than one.
+// a real lookup once Layer 3 has more than one.
 const CONSORTIUM_ID = ethers.id("bronte");
 const SEASON_ID = ethers.id("bronte-2026");
+const SEASON_LABEL = "2026";
+const MINTER_ROLE = 1n << 40n; // must match ens/roles.mjs and the contract's MINTER_ROLE
 
 // Opportunistic tripwire, not the detector. The subgraph, reconciling full
 // Hedera mirror-node history against every anchor event, is what actually
@@ -60,16 +67,50 @@ async function checkRetirementTripwire() {
 }
 
 async function doOpenSeason() {
-  console.log("Opening season (anchor-only; the Hedera token already exists, nothing to do there)...");
-  const capGrams = 3_400_000_000n; // real known cap, caller-supplied -- see contract TODO(ENS)
-  const ensNode = ethers.ZeroHash; // no ENS node yet: Layer 3 doesn't exist. Zero means "not linked", not a faked value.
+  console.log("Opening season -- cap will be read from ENS by the contract itself, not supplied here...");
+  const node = ethers.namehash("2026.bronte.quota.eth");
 
-  const tx = await anchor.openSeason(CONSORTIUM_ID, 2026, capGrams, hederaTokenId, ensNode);
+  const tx = await anchor.openSeason(
+    SEASON_ID,
+    CONSORTIUM_ID,
+    2026,
+    process.env.ENS_BRONTE_REGISTRY_ADDRESS,
+    SEASON_LABEL,
+    process.env.ENS_RESOLVER_ADDRESS,
+    node,
+    hederaTokenId,
+  );
   const receipt = await tx.wait();
   console.log("SeasonOpened anchored. Sepolia tx:", receipt.hash);
 }
 
-async function doMint(grams) {
+// "Resolves the season name before every mint and refuses if it doesn't
+// resolve or the role is absent" -- an off-chain courtesy check so a bad
+// call never even reaches the contract, not a substitute for the contract's
+// own on-chain enforcement (which re-checks both independently).
+async function checkSeasonAuthorization(certifier) {
+  const resolverAddr = await bronteRegistry.getResolver(SEASON_LABEL);
+  if (resolverAddr === ethers.ZeroAddress) {
+    throw new Error(
+      `REFUSED: "${SEASON_LABEL}.bronte.quota.eth" does not resolve (expired or unregistered). No transaction sent.`,
+    );
+  }
+
+  const tokenId = await bronteRegistry.findTokenId(SEASON_LABEL);
+  const hasMinterRole = await bronteRegistry.hasRoles(tokenId, MINTER_ROLE, certifier);
+  if (!hasMinterRole) {
+    throw new Error(
+      `REFUSED: ${certifier} does not hold MINTER role for this season. No transaction sent.`,
+    );
+  }
+
+  console.log(`  Season resolves (resolver ${resolverAddr}) and ${certifier} holds MINTER. Proceeding.`);
+}
+
+async function doMint(grams, certifier) {
+  console.log(`Checking season authorization for certifier ${certifier}...`);
+  await checkSeasonAuthorization(certifier);
+
   console.log(`Minting ${grams} grams on Hedera (token ${hederaTokenId})...`);
   const mintSubmit = await new TokenMintTransaction()
     .setTokenId(hederaTokenId)
@@ -95,7 +136,7 @@ async function doMint(grams) {
 
   console.log("Anchoring on Sepolia...");
   try {
-    const tx = await anchor.recordMint(SEASON_ID, wallet.address, grams, hederaTxId);
+    const tx = await anchor.recordMint(SEASON_ID, wallet.address, grams, hederaTxId, certifier);
     const receipt = await tx.wait();
     console.log("Anchored. Sepolia tx:", receipt.hash);
     console.log("Etherscan:", `https://sepolia.etherscan.io/tx/${receipt.hash}`);
@@ -120,10 +161,11 @@ try {
     await doOpenSeason();
   } else if (command === "mint") {
     const grams = Number(args[0]);
-    if (!Number.isInteger(grams) || grams <= 0) {
-      throw new Error("Usage: node scripts/relayer.mjs mint <grams>");
+    const certifier = args[1] || process.env.ENS_CERTIFIER_ADDRESS;
+    if (!Number.isInteger(grams) || grams <= 0 || !certifier) {
+      throw new Error("Usage: node scripts/relayer.mjs mint <grams> [certifierAddress]");
     }
-    await doMint(grams);
+    await doMint(grams, certifier);
   } else {
     console.log("Usage: node scripts/relayer.mjs <open-season|mint> [args]");
     process.exitCode = 1;
