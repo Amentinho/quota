@@ -1,0 +1,17 @@
+{
+  "name": "quota-contracts",
+  "version": "1.0.0",
+  "description": "Hardhat 3 project. `QuotaAnchor.sol` — the Sepolia authorization-record contract (Layer 2). Not yet implemented.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "private": "true",
+  "devDependencies": {
+    "hardhat": "^3.16.0"
+  }
+}
