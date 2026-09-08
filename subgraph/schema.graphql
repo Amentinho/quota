@@ -4,13 +4,13 @@ claim: the same query shape works for any consortium, with only the id
 changing -- nothing here is Bronte-specific, even though Bronte is the only
 consortium with real data today.
 """
-type Consortium @entity {
+type Consortium @entity(immutable: false) {
   id: Bytes! # consortiumId
   seasons: [Season!]! @derivedFrom(field: "consortium")
   participants: [Participant!]! @derivedFrom(field: "consortium")
 }
 
-type Season @entity {
+type Season @entity(immutable: false) {
   id: Bytes! # seasonId
   consortium: Consortium!
   year: BigInt!
@@ -35,7 +35,7 @@ type Season @entity {
   unauthorizedMints: [UnauthorizedMint!]! @derivedFrom(field: "season")
 }
 
-type Participant @entity {
+type Participant @entity(immutable: false) {
   id: Bytes! # address
   consortium: Consortium!
   role: String!
@@ -47,7 +47,7 @@ type Participant @entity {
 A lot aggregates every retirement recorded against the same lotRef within a
 season -- a lotRef can be retired against more than once as it sells through.
 """
-type Lot @entity {
+type Lot @entity(immutable: false) {
   id: String! # `${seasonId}-${lotRef}`
   season: Season!
   lotRef: String!
