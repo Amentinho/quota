@@ -1,6 +1,6 @@
 # hedera
 
-HTS scripts using `@hashgraph/sdk` (Layer 1): token creation, mint, retire (transfer + freeze), transformation. Day 1: token creation + invariant proof scripts only.
+HTS scripts using `@hashgraph/sdk` (Layer 1): token creation, mint, retire (transfer + freeze), transformation. Currently implemented: token creation and the invariant-proof scripts below; retire/transformation flows are not yet built.
 
 Run from the repo root so `--env-file` finds `.env`:
 

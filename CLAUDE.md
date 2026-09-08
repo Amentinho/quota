@@ -1,7 +1,5 @@
 # CLAUDE.md — QUOTA
 
-ETHGlobal ETHOnline 2026, "Start from Scratch" track. Day 1: 2026-09-07. Submission ~2026-09-16.
-
 Local path: `/Users/andreaamenta/Desktop/quota` (not `~/Projects` — deliberately scaffolded on Desktop alongside the unrelated Virtusgreen repo).
 
 ## What this is
@@ -26,18 +24,36 @@ All ratio maths uses integer basis points and always rounds down (floor division
 
 The atomic unit is one GRAM. Every integer in contracts, scripts, subgraph and relayer is a count of grams. Never name a variable `*Kg` — use `*Grams` everywhere. Convert to kg only at the UI rendering edge. HTS `decimals` affects display only — `maxSupply` and every mint/transfer amount is expressed in grams.
 
-## Retire, don't burn (design decision — locked in on day 1, before any code)
+## Design decisions
 
-Hedera HTS `maxSupply` on a `FINITE` token caps **circulating** `totalSupply` — mint increases it, burn decreases it, same semantics as ERC-20 `totalSupply`. A literal burn would let minting resume afterward, which destroys "supply can never exceed the harvest." We ran `TokenBurnTransaction` once on day 1 purely to confirm this empirically (see Status below for the result) — that test is documentation, not part of the product.
+### Retire, don't burn
+
+Hedera HTS `maxSupply` on a `FINITE` token caps **circulating** `totalSupply` — mint increases it, burn decreases it, same semantics as ERC-20 `totalSupply`. A literal burn lets minting resume afterward, which destroys "supply can never exceed the harvest."
+
+Confirmed empirically against the live token (`0.0.10411251`), not assumed:
+```
+Total supply before burn:  3,400,000,000 grams (at cap)
+Burn 100,000 grams:         status SUCCESS
+Total supply after burn:   3,399,900,000 grams
+Mint 1 gram:                 status SUCCESS
+Total supply after mint:   3,399,900,001 grams
+```
+Burning did reopen mint headroom.
 
 Fix: **the product never calls `TokenBurnTransaction`.**
 
-- Consumption at retail / processing input consumption = transfer units to a dedicated **retirement account**, then freeze that account with the `freezeKey` so units can never leave. Circulating `totalSupply` never decreases, so `maxSupply` is a true **lifetime issuance cap** enforced by Hedera consensus — the original "cap enforced by consensus, not our code" claim holds.
+- Consumption at retail / processing input consumption = transfer units to a dedicated **retirement account**, then freeze that account with the `freezeKey` so units can never leave. Circulating `totalSupply` never decreases, so `maxSupply` is a true **lifetime issuance cap** enforced by Hedera consensus — the "cap enforced by consensus, not our code" claim holds.
 - The retirement account's balance (readable from the mirror node) is the public "consumed" figure.
-- This mirrors how carbon credits and renewable Guarantees of Origin are actually retired — it strengthens the pitch, not just a workaround.
+- This mirrors how carbon credits and renewable Guarantees of Origin are actually retired.
 - Transformation: input units are **retired**, not burned. Derived units are minted on a **separate token** whose `maxSupply` = `input_cap * yield_bp / 10000`, floored.
+- The retirement-account + freeze flow itself is not yet implemented — see Status.
 
-## Trust boundaries (prevention where we can, detection where we can't)
+For reference, minting past the cap in the first place is rejected outright:
+```
+Mint 1 gram beyond cap (total supply already at maxSupply): status TOKEN_MAX_SUPPLY_REACHED
+```
+
+### Trust boundaries
 
 State this plainly in the README, don't overclaim trustlessness:
 
@@ -47,11 +63,11 @@ State this plainly in the README, don't overclaim trustlessness:
 - **The subgraph is the detector**: it reconciles Hedera mirror-node mint history against anchor events, so any unauthorized mint is publicly visible.
 - Explicit limitation: the Hedera `supplyKey` holder *could* mint without going through the relayer/ENS check — Hedera consensus has no knowledge of ENS or Sepolia, so that mint would still succeed on Hedera. It would, however, show up in subgraph reconciliation as a mint with no matching anchor event. We can't make unauthorized minting impossible; we make it impossible to hide.
 
-## Prize tracks (build to these checklists)
+## Design requirements
 
-1. **Hedera, Tokenization of Anything** — full asset lifecycle: issuance, compliance-controlled transfer, transformation, retirement. Bonus: KYC/freeze controls, custom fee schedule, scheduled transactions, multiple Hedera services (HCS mirroring planned).
-2. **The Graph, Composable/Standardized** — one shared schema indexing three different consortia, queried with a single query pattern. Real Subgraph Studio deployment (slug: `quota`) — mocked data disqualifies.
-3. **ENS, Best Use of ENSv2** — must be central. Kill test: delete ENS and the contract does not function — no mint authorization, no season boundaries, no cap values, no participant identity.
+- Full asset lifecycle: issuance, compliance-controlled transfer, transformation, retirement — with KYC/freeze controls, a custom fee schedule, and (planned) HCS mirroring alongside HTS.
+- One shared subgraph schema indexing multiple consortia through a single query pattern, backed by a real Subgraph Studio deployment (project slug: `quota`) — no mocked data.
+- ENS must be central to authorization, not decorative. Kill test: delete ENS state and the system stops functioning — no mint authorization, no season boundaries, no cap values, no participant identity.
 
 ## Architecture — three layers
 
@@ -92,17 +108,6 @@ Four load-bearing mechanisms:
 3. **Resolver text records are the canonical parameters.** QuotaAnchor reads the cap from the resolver rather than storing it: `quota.unit = "g"`, `quota.cap.g`, `quota.token.hedera`, `quota.yield.kernel.bp`, `quota.yield.cream.bp`. Basis points, never decimal strings — no float parsing anywhere.
 4. **Participant subnames are non-transferable** and gate KYC grants on the Hedera token. You cannot sell your place in the supply chain.
 
-## Verified environment (2026-09-01 prep — do NOT re-check)
-
-- Hedera ATS SDK is BROKEN for our purposes: ESM import fails, monorepo-only build, 1 critical vuln. **Do not use it. Ever.**
-- The Graph does NOT support Hedera. We use Ethereum Sepolia (Base Sepolia, Arbitrum Sepolia also supported but not used).
-- ENS v2 with Enhanced Access Control is live on Sepolia and usable (beta — contracts may still change before mainnet).
-- Hardhat 3.15 needs `"type": "module"` in `package.json` and `hardhat.config.ts` using `defineConfig` from `hardhat/config`. A `.js`/`.mjs` config is rejected with `HHE3`.
-- Foundry is NOT installed and we are NOT installing it.
-- `@hashgraph/sdk` installs and works. `Client.forTestnet()` needs `.close()` or the process hangs.
-- Node v24.20.0, npm 11.19.0, no pnpm, no yarn. macOS arm64.
-- `graph-cli` 0.98.1 installed. Subgraph Studio project slug: `quota`.
-
 ## Repo layout
 
 ```
@@ -120,30 +125,54 @@ quota/
   LICENSE            MIT
 ```
 
+## Environment and tooling notes (do not re-verify — already confirmed)
+
+- Hedera ATS SDK is BROKEN for our purposes: ESM import fails, monorepo-only build, 1 critical vuln. **Do not use it. Ever.**
+- The Graph does NOT support Hedera. We use Ethereum Sepolia (Base Sepolia, Arbitrum Sepolia also supported but not used).
+- ENS v2 with Enhanced Access Control is live on Sepolia and usable (beta — contracts may still change before mainnet).
+- Hardhat 3.15 needs `"type": "module"` in `package.json` and `hardhat.config.ts` using `defineConfig` from `hardhat/config`. A `.js`/`.mjs` config is rejected with `HHE3`.
+- Foundry is NOT installed and we are NOT installing it.
+- `@hashgraph/sdk` installs and works. `Client.forTestnet()` needs `.close()` or the process hangs.
+- Node v24.20.0, npm 11.19.0, no pnpm, no yarn. macOS arm64.
+- `graph-cli` 0.98.1 installed. Subgraph Studio project slug: `quota`.
+- `gh` CLI is installed at `/usr/local/bin/gh` but is an x86_64 binary that fails with "bad CPU type in executable" on this arm64 Mac (broken Homebrew install — do not try to fix via brew). Git pushes go over SSH with a dedicated ed25519 key at `~/.ssh/id_ed25519`, added to the GitHub account manually; origin remote is `git@github.com:Amentinho/quota.git`, not HTTPS.
+
 ## Working agreements
 
 - Small steps, one component at a time; give a runnable command to see each one work.
 - Explain design choices in plain language before implementing.
 - Never dump large diffs — split anything large.
-- Commit after every working step, descriptive messages — ETHGlobal penalizes sparse or giant-commit history.
-- If a dependency fights for more than ~45 minutes, STOP and report. Take the fallback rather than sink the day.
+- Commit after every working step with a descriptive message; avoid squashing history into a few giant commits.
+- If a dependency fights for more than ~45 minutes, stop and report. Take the fallback rather than burn time sinking into it.
 - Ask before adding any dependency not already named.
-- Never print secrets back to the user. `.env` gitignored from commit 1.
-- End each session by updating this file: what's done, what's next, gotchas — sessions run separately.
+- Never print secrets back to the user. `.env` is gitignored from the first commit.
+- Repo files (README, this file) describe what the system does and why, in the present tense — no day numbers, dates, schedules, or timeline framing.
+- End each working session by updating this file: what's built, what's not yet built, known gotchas, open decisions — sessions run independently of each other.
 
 ## Status
 
-**2026-09-07 — Day 1, in progress.**
+### Built
+- Repo scaffold: directory structure, MIT license, gitignore, README, this file. Public on GitHub: https://github.com/Amentinho/quota.
+- Layer 1 HTS token created and verified on Hedera testnet. `HEDERA_TOKEN_ID=0.0.10411251` (also in `.env`, gitignored). https://hashscan.io/testnet/token/0.0.10411251 — `maxSupply` `3400000000` raw / `3,400,000.000` as HashScan renders it (decimals 3 happens to render grams as kg). Creation transaction fee: 24.44346741 ℏ. Confirmed on-chain: `adminKey`, `wipeKey`, `pauseKey`, `feeScheduleKey` all absent (token and its 1 ℏ transfer fee are both immutable). `supplyKey`/`kycKey`/`freezeKey` all set to the operator key (see Not yet built). Custom fee live: 1 ℏ fixed fee per transfer, collector `0.0.10323351` (operator account), `allCollectorsAreExempt: true`.
+- Invariant proof, run against the live token:
+  - Mint to cap (3,400,000,000 grams): status `SUCCESS`, resulting total supply equals cap exactly.
+  - Mint 1 gram beyond cap: rejected, status `TOKEN_MAX_SUPPLY_REACHED`.
+  - Burn 100,000 grams, then mint 1 gram again: both status `SUCCESS` — burning reopened mint headroom. This is the empirical basis for Retire, don't burn above.
 
-Done:
-- Repo scaffolded locally: directory structure, MIT license, gitignore, this file, README.
+### Not yet built
+- Layer 2: `QuotaAnchor.sol` (`contracts/` is currently just a placeholder).
+- Layer 3: ENS subname registration, EAC role grants, resolver text records (`ens/` is currently just a placeholder).
+- Subgraph schema and mappings (`subgraph/` is currently just a placeholder).
+- Relayer script that binds a Hedera mint call to ENS state before executing it.
+- The actual retirement-account + freeze-lock flow described in Retire, don't burn — proven necessary, not yet implemented.
+- Distinct `supplyKey`/`kycKey`/`freezeKey` — currently all one operator key; a real consortium deployment would split these so a certifier can hold a scoped minting role without also controlling freeze/KYC.
+- Dashboard app, fraud-gap radar script, seed data for multiple consortia.
 
-Next:
-- Run `hedera/create-token.mjs` once the user has pasted credentials into `.env` and reviewed the script (paused before execution, per user request). Creates the Layer 1 HTS token: name `QUOTA Bronte PDO Pistachio 2026`, symbol `QBRP26`, `maxSupply 3_400_000_000` grams, `decimals 3`, `FINITE`, `supplyKey`/`kycKey`/`freezeKey` all set to the operator key (day-1 simplification — see script comment), custom fixed fee of 1 HBAR per transfer collected by the operator account with `allCollectorsAreExempt: true`, no admin/wipe/pause/feeSchedule keys.
-- Prove the invariant on testnet: mint to cap succeeds; mint 1 more fails (record exact status code/error string); burn 100,000 then try minting 1 again (record whether headroom reopens — expected yes, confirms the retire-don't-burn design above).
-- Confirm HashScan shows `3,400,000.000` display / `3400000000` raw maxSupply; record both links.
-- Report HBAR cost per transaction.
+### Known gotchas
+- `Client.forTestnet()` keeps the Node process alive unless `.close()` is called explicitly.
+- Hardhat 3 requires ESM (`"type": "module"`) and a `hardhat.config.ts` using `defineConfig` — a `.js`/`.mjs` config fails with `HHE3`.
+- `gh` CLI is broken on this machine (wrong CPU architecture); git operations go over SSH with a dedicated key, not HTTPS/gh.
+- Without an `adminKey`, the token's `kycKey`/`freezeKey`/fee schedule can never be changed after creation — deliberate (immutability is the point), but any mistake in those parameters at creation time is permanent for this token.
 
-Resolved: repo is public and pushed to https://github.com/Amentinho/quota via SSH (gh CLI is broken on this machine — see above — so we generated a dedicated ed25519 key at `~/.ssh/id_ed25519` and the user added it to their GitHub account; origin remote uses `git@github.com:Amentinho/quota.git`). Custom fee schedule resolved: 1 HBAR fixed fee, denominated in HBAR not the token, collected by the operator account, `allCollectorsAreExempt: true` so treasury/retirement transfers aren't taxed.
-
-**Layer 1 token created.** `HEDERA_TOKEN_ID=0.0.10411251` (also in `.env`). https://hashscan.io/testnet/token/0.0.10411251 — maxSupply `3400000000` raw / `3,400,000.000` as HashScan renders it. Creation tx fee: 24.44346741 ℏ. Confirmed on-chain via HashScan and `hedera/verify-token.mjs`: adminKey, wipeKey, pauseKey, feeScheduleKey all absent (token and fee both immutable); supplyKey/kycKey/freezeKey all set to the operator key. Custom fee live: 1 ℏ fixed fee, collector `0.0.10323351` (operator), `allCollectorsAreExempt: true`.
+### Open decisions
+- When (or whether, for the testnet build) to split `supplyKey`/`kycKey`/`freezeKey` into separate keys instead of reusing the operator key.

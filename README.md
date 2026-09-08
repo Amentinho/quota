@@ -18,6 +18,28 @@ retiring does NOT free headroom to mint again
 
 The atomic unit is one gram. Basis-point math only, always rounded down — rounding up would create units from nothing.
 
+## Why we retire instead of burn
+
+Hedera HTS `maxSupply` on a `FINITE` token caps *circulating* `totalSupply`, not lifetime issuance — the same semantics as an ERC-20 `totalSupply`: mint increases it, burn decreases it. This isn't a theoretical concern; it's measured behavior on the live token (`0.0.10411251`):
+
+```
+Total supply before burn:  3,400,000,000 grams (at cap)
+Burn 100,000 grams:         status SUCCESS
+Total supply after burn:   3,399,900,000 grams
+Mint 1 gram:                 status SUCCESS
+Total supply after mint:   3,399,900,001 grams
+```
+
+Burning freed up headroom, and minting resumed past the point where the harvest cap should have made it impossible. A system that used `TokenBurnTransaction` as its "consumption" step would let someone over-issue simply by burning and re-minting — the opposite of what a conservation law needs.
+
+So the product never calls `TokenBurnTransaction`. Consumption — at retail, or as input to processing — is a transfer to a dedicated retirement account, followed by freezing that account with the token's `freezeKey` so units can never leave it again. Circulating `totalSupply` never decreases, so `maxSupply` really is a lifetime issuance cap, enforced by Hedera consensus rather than application code. The retirement account's balance, readable from the mirror node, is the public "consumed" figure — the same mechanism carbon credits and renewable energy Guarantees of Origin use to retire credits in practice.
+
+For reference, the rejection at the cap itself behaves exactly as expected:
+
+```
+Mint 1 gram beyond cap (total supply already at maxSupply): status TOKEN_MAX_SUPPLY_REACHED
+```
+
 ## Architecture
 
 Three layers, deliberately kept separate:
@@ -41,7 +63,7 @@ One limitation we want to be explicit about: the Hedera account holding the toke
 
 ## Status
 
-Day 1 of ETHGlobal ETHOnline 2026 (submission ~2026-09-16). Repo scaffolding and the Layer 1 invariant proof are in progress. See [`CLAUDE.md`](CLAUDE.md) for current build status.
+Layer 1 — the Hedera asset and its core invariant — is implemented and verified on testnet, including the retire-vs-burn evidence above. Layers 2 (the Sepolia accountability contract) and 3 (the ENS v2 policy layer) are not yet implemented. See [`CLAUDE.md`](CLAUDE.md) for the current build breakdown.
 
 ## License
 
