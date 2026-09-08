@@ -32,7 +32,7 @@ Total supply after mint:   3,399,900,001 grams
 
 Burning freed up headroom, and minting resumed past the point where the harvest cap should have made it impossible. A system that used `TokenBurnTransaction` as its "consumption" step would let someone over-issue simply by burning and re-minting — the opposite of what a conservation law needs.
 
-So the product never calls `TokenBurnTransaction`. Consumption — at retail, or as input to processing — is a transfer to a dedicated retirement account, followed by freezing that account with the token's `freezeKey` so units can never leave it again. Circulating `totalSupply` never decreases, so `maxSupply` really is a lifetime issuance cap, enforced by Hedera consensus rather than application code. The retirement account's balance, readable from the mirror node, is the public "consumed" figure — the same mechanism carbon credits and renewable energy Guarantees of Origin use to retire credits in practice.
+So the product never calls `TokenBurnTransaction`. Consumption — at retail, or as input to processing — is a transfer to a dedicated retirement account, made permanently unable to send anything back out. Circulating `totalSupply` never decreases, so `maxSupply` really is a lifetime issuance cap, enforced by Hedera consensus rather than application code. The retirement account's balance, readable from the mirror node, is the public "consumed" figure — the same mechanism carbon credits and renewable energy Guarantees of Origin use to retire credits in practice: a retired credit isn't deleted, it's placed in a registry account that can only ever receive, never spend. Exactly how that account is made permanently unable to send anything is its own question, covered below — we tested three ways to do it and rejected two of them for reasons worth recording alongside the one we kept.
 
 For reference, the rejection at the cap itself behaves exactly as expected:
 
@@ -40,19 +40,34 @@ For reference, the rejection at the cap itself behaves exactly as expected:
 Mint 1 gram beyond cap (total supply already at maxSupply): status TOKEN_MAX_SUPPLY_REACHED
 ```
 
-Retired units aren't removed from `totalSupply` — they're moved into a dedicated retirement account and then permanently immobilized: the account is frozen with the token's `freezeKey`, so nothing can ever move out of it again, in either direction. This is the same mechanism carbon credits and renewable energy Guarantees of Origin use to retire credits — a retired credit isn't deleted, it's placed in a registry account that can only ever receive, never spend.
+## Making retirement permanent
 
-Proven, not assumed, against the live retirement account (`0.0.10421765`, holding 50,000 grams on token `0.0.10411251`):
+For a retirement account to actually be permanent, a transfer out of it has to be impossible, not just against policy. We tested three ways to guarantee that, in order of strength, against the live token (`0.0.10411251`) — not on theory:
 
+**1. An account whose key can never produce a valid signature — rejected outright by Hedera.** If this worked, no one, not even us, could ever sign a transfer out: a cryptographic proof rather than a promise. Two constructions, both rejected at the protocol level before a transfer could even be attempted:
 ```
-Transfer 1 gram out of the frozen retirement account: status ACCOUNT_FROZEN_FOR_TOKEN
+Account with an empty KeyList (zero signers):                status KEY_REQUIRED
+Account with a KeyList of 1 key, threshold set to 2 (2-of-1): status INVALID_ADMIN_KEY
 ```
+Hedera validates that an account's key is actually satisfiable before it will create the account — there's no way to construct a genuinely unsignable account on Hedera.
+
+**2. Freezing the account with the token's `freezeKey` — works, but rejected anyway.** We built and proved this first: transfer in, freeze, then an attempted transfer out fails with `ACCOUNT_FROZEN_FOR_TOKEN`. It works, but we dropped it for two reasons unrelated to whether it works: freezing is bidirectional — the same lever that suspends a compromised participant is the one this would spend on retirement instead — and it's reversible right up until the moment `TokenFreezeTransaction` is actually called, so retirement would be final because we remembered to freeze it, not final on arrival. Freezing stays reserved for its real purpose.
+
+**3. A keypair generated for the account, used once for the association Hedera requires, then discarded — what's actually live now.** The retirement account (`0.0.10422087`) was created with a freshly generated key. That key signed exactly one transaction — `TokenAssociateTransaction`, which Hedera always requires the account's own signature for, no exception — and was then never stored, written to a file, or printed anywhere; the last in-process reference to it was dropped immediately after. KYC-approved, received 1 gram, and an outbound transfer attempted with no signature to provide:
+```
+Transfer 1 gram out of the discarded-key account: status INVALID_SIGNATURE
+```
+This is weaker than option 1 would have been: it's a trust claim (we say the key is gone) rather than a cryptographic proof (no key could ever have existed). We're documenting that honestly rather than overselling it — the account-creation script is a few lines anyone can read, and there's no step in it where retaining the key would even be tempting, but it remains a claim, not a proof.
+
+One structural finding along the way: `maxAutomaticTokenAssociations` — the usual way to let an account receive a token without ever signing an association — doesn't rescue a KYC-gated token. Auto-association only takes effect as part of a successful transfer, but a transfer to an un-KYC'd account fails outright (`ACCOUNT_KYC_NOT_GRANTED_FOR_TOKEN`), and KYC can't be granted before an association exists (`TOKEN_NOT_ASSOCIATED_TO_ACCOUNT`). For a token with a `kycKey`, there is no way around signing the association at least once.
 
 The retirement account's balance is public and independently verifiable through Hedera's mirror node, with no need to trust our own reporting of it:
 
 ```
-https://testnet.mirrornode.hedera.com/api/v1/tokens/0.0.10411251/balances?account.id=0.0.10421765
+https://testnet.mirrornode.hedera.com/api/v1/tokens/0.0.10411251/balances?account.id=0.0.10422087
 ```
+
+Each consortium-season gets its own retirement account under this scheme, so a season's retired total is one mirror-node query away, with no indexing required.
 
 ## Architecture
 

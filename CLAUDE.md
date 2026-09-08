@@ -42,16 +42,39 @@ Burning did reopen mint headroom.
 
 Fix: **the product never calls `TokenBurnTransaction`.**
 
-- Consumption at retail / processing input consumption = transfer units to a dedicated **retirement account**, then freeze that account with the `freezeKey` so units can never leave. Circulating `totalSupply` never decreases, so `maxSupply` is a true **lifetime issuance cap** enforced by Hedera consensus — the "cap enforced by consensus, not our code" claim holds.
+- Consumption at retail / processing input consumption = transfer units to a dedicated **retirement account**, made permanently unable to send anything back out (see Making retirement permanent, below, for how). Circulating `totalSupply` never decreases, so `maxSupply` is a true **lifetime issuance cap** enforced by Hedera consensus — the "cap enforced by consensus, not our code" claim holds.
 - The retirement account's balance (readable from the mirror node) is the public "consumed" figure.
 - This mirrors how carbon credits and renewable Guarantees of Origin are actually retired.
 - Transformation: input units are **retired**, not burned. Derived units are minted on a **separate token** whose `maxSupply` = `input_cap * yield_bp / 10000`, floored.
-- Built and verified against the live token — see Status. Retirement account `0.0.10421765` holds 50,000 grams and is frozen on `0.0.10411251`; attempting to move a unit back out is rejected with `ACCOUNT_FROZEN_FOR_TOKEN`. The freeze blocks transfers in both directions, so a frozen retirement account can't receive further retirements either without an explicit unfreeze first — see Open decisions for what that implies about the season boundary.
+- Built and verified against the live token — see Status.
 
 For reference, minting past the cap in the first place is rejected outright:
 ```
 Mint 1 gram beyond cap (total supply already at maxSupply): status TOKEN_MAX_SUPPLY_REACHED
 ```
+
+### Making retirement permanent
+
+A retirement account only works if a transfer out of it is impossible, not just against policy. Three options tested against the live token (`0.0.10411251`), in order of strength — status codes are measured, not assumed:
+
+1. **Unsignable account (empty KeyList, or impossible threshold key) — rejected by Hedera itself, before a transfer could even be attempted.** `hedera/investigate-unspendable-key.mjs`.
+   ```
+   AccountCreateTransaction, key = empty KeyList (0 members):            KEY_REQUIRED
+   AccountCreateTransaction, key = KeyList(1 member), threshold 2 (2-of-1): INVALID_ADMIN_KEY
+   ```
+   Hedera validates key satisfiability at creation. There is no way to construct a genuinely unsignable account on this network — this option is not available, full stop, not just "weaker."
+
+2. **Freeze with the token's `freezeKey` — works, rejected for design reasons.** `hedera/create-retirement-account.mjs` + `hedera/freeze-retirement-account.mjs` + `hedera/prove-retirement-immutable.mjs` (kept in the repo as a proven-but-superseded prototype; account `0.0.10421765`, 50,000 grams, frozen, `ACCOUNT_FROZEN_FOR_TOKEN` on outbound attempt). Rejected because freezing is bidirectional (the lever meant for suspending a compromised participant, not for retirement) and reversible right up until `TokenFreezeTransaction` is actually called — retirement should be final on arrival, not final because we remembered to freeze it. **Correction to a previous entry here**: this file previously stated as fact that a frozen account can't receive further transfers either. That was never actually tested — it was inferred from freeze semantics, not measured. It's moot now since freeze isn't the retirement mechanism, and we didn't go back to test it once option 3 worked; treat it as unverified if it resurfaces.
+
+3. **Ephemeral keypair, used once for the required association, then discarded — what's live now.** `hedera/create-discarded-key-retirement-account.mjs`. Retirement account `0.0.10422087`: created with a freshly generated key, that key signed exactly one transaction (`TokenAssociateTransaction` — Hedera always requires the account's own signature for this, no exception), then the key was never stored, written to a file, or printed; the last in-process reference was set to `null`. KYC-approved, received 1 gram, outbound attempt with no signature to provide:
+   ```
+   INVALID_SIGNATURE
+   ```
+   Weaker than option 1 would have been — a trust claim (we say the key is gone), not a cryptographic proof (no key could ever have existed). Documented as such, not oversold.
+
+   Structural finding along the way: `setMaxAutomaticTokenAssociations` doesn't rescue this for a KYC-gated token. Auto-association only takes effect as part of a successful transfer; a transfer to an un-KYC'd account fails with `ACCOUNT_KYC_NOT_GRANTED_FOR_TOKEN`, and KYC can't be granted before association exists (`TOKEN_NOT_ASSOCIATED_TO_ACCOUNT`) — confirmed by first trying the auto-associate route, which deadlocked and left account `0.0.10422047` permanently stuck (unassociated, key already discarded — an accidental but honest demonstration of how final "discard" really is).
+
+Each consortium-season gets its own retirement account under this scheme — retired totals are then one mirror-node query away per season, no indexing needed.
 
 ### Trust boundaries
 
@@ -79,7 +102,7 @@ One HTS fungible token per consortium-season.
 - **No `adminKey`, no `wipeKey`, no `pauseKey`** — fully immutable token, no way to change terms after creation
 - Custom fixed fee (consortium levy) set **at creation time**, no `feeScheduleKey` — the fee is immutable too, since without an admin key there's no way to add a fee-schedule key later
 - `kycKey` — gates which supply-chain participants may hold units
-- `freezeKey` — suspends a participant, and is reused to permanently lock the retirement account after retirement
+- `freezeKey` — suspends a compromised participant. Not used for retirement (see Making retirement permanent) — a discarded key does that job instead, so freeze stays dedicated to its real purpose
 - The cap is enforced by Hedera consensus, not our code. Do not reimplement it in Solidity.
 
 **Layer 2 — public accountability, Ethereum Sepolia.**
@@ -158,7 +181,8 @@ quota/
   - Mint to cap (3,400,000,000 grams): status `SUCCESS`, resulting total supply equals cap exactly.
   - Mint 1 gram beyond cap: rejected, status `TOKEN_MAX_SUPPLY_REACHED`.
   - Burn 100,000 grams, then mint 1 gram again: both status `SUCCESS` — burning reopened mint headroom. This is the empirical basis for Retire, don't burn above.
-- Retirement mechanism, built and verified against the live token. Retirement account `0.0.10421765` (own key, in `.env` as `HEDERA_RETIREMENT_ACCOUNT_ID`/`HEDERA_RETIREMENT_ACCOUNT_KEY`, gitignored) created, associated with `0.0.10411251`, and KYC-approved. 50,000 grams transferred from treasury (`hedera/retire.mjs`); `totalSupply` confirmed unchanged before/after (3,399,900,001 both times — transfers don't touch supply, unlike burn). Account then frozen with the token's `freezeKey`. Attempting to move 1 gram back out afterward: rejected, status `ACCOUNT_FROZEN_FOR_TOKEN`. Balance independently verifiable via the mirror node: `https://testnet.mirrornode.hedera.com/api/v1/tokens/0.0.10411251/balances?account.id=0.0.10421765`.
+- Retirement mechanism, built and verified against the live token — see Making retirement permanent above for the full evidence and rejected alternatives. Canonical retirement account: `HEDERA_RETIREMENT_ACCOUNT_ID=0.0.10422087` (in `.env`; no key to store — it was discarded by design), created with a keypair used once for association then dropped, KYC-approved, associated with `0.0.10411251`. Holds 1 gram (the proof transfer); `hedera/retire.mjs` transfers further amounts into it. Outbound transfer with no signature to provide: rejected, `INVALID_SIGNATURE`. Balance: `https://testnet.mirrornode.hedera.com/api/v1/tokens/0.0.10411251/balances?account.id=0.0.10422087`.
+  - Deprecated prototype (superseded, not deleted — kept for the historical record and because it's still holding retired supply): `0.0.10421765` (`HEDERA_DEPRECATED_FROZEN_RETIREMENT_ACCOUNT_ID`/`_KEY` in `.env`), holds 50,000 grams, frozen via `freezeKey`. Frozen means it's stuck permanently too, just via a mechanism we no longer use for new retirements.
 
 ### Not yet built
 - Layer 2: `QuotaAnchor.sol` (`contracts/` is currently just a placeholder).
@@ -174,8 +198,10 @@ quota/
 - Hardhat 3 requires ESM (`"type": "module"`) and a `hardhat.config.ts` using `defineConfig` — a `.js`/`.mjs` config fails with `HHE3`.
 - `gh` CLI is broken on this machine (wrong CPU architecture); git operations go over SSH with a dedicated key, not HTTPS/gh.
 - Without an `adminKey`, the token's `kycKey`/`freezeKey`/fee schedule can never be changed after creation — deliberate (immutability is the point), but any mistake in those parameters at creation time is permanent for this token.
-- `TokenFreezeTransaction` blocks transfers in *both* directions, not just outbound. A frozen retirement account can't receive further retirements either — `retire.mjs` against an already-frozen account will fail, not silently succeed.
+- Hedera validates account-key satisfiability at creation: an empty `KeyList` fails with `KEY_REQUIRED`, a `KeyList` whose threshold exceeds its member count fails with `INVALID_ADMIN_KEY`. You cannot create a genuinely unsignable account.
+- `TokenGrantKycTransaction` requires the target account to already be associated with the token (`TOKEN_NOT_ASSOCIATED_TO_ACCOUNT` otherwise), and `TokenAssociateTransaction` always requires the account's own signature — no exception, even with `setMaxAutomaticTokenAssociations` set. Auto-association only fires as a side effect of a *successful* transfer, and a transfer to a not-yet-KYC'd account fails first (`ACCOUNT_KYC_NOT_GRANTED_FOR_TOKEN`), so for a KYC-gated token there's no way to bootstrap an account into holding it without signing an explicit association at least once.
+- `TokenFreezeTransaction` blocks transfers in *both* directions, not just outbound — noted for the record from the now-superseded freeze-based retirement prototype; not verified by us directly (see Making retirement permanent) and not relevant to the current retirement mechanism.
 
 ### Open decisions
 - When (or whether, for the testnet build) to split `supplyKey`/`kycKey`/`freezeKey` into separate keys instead of reusing the operator key.
-- How retirement accounts map to season boundaries: reuse one retirement account per season (unfreeze with `freezeKey`, transfer, refreeze, repeat) vs. freeze permanently after each retirement and mint/use a fresh retirement account for the next one. Current testnet account (`0.0.10421765`) is frozen after a single retirement and hasn't been unfrozen since.
+- How per-season retirement-account provisioning gets triggered in the actual product: one discarded-key retirement account per consortium-season is the decided design (see Making retirement permanent), but nothing yet automates creating one when a season opens — today it's a manually run script.
