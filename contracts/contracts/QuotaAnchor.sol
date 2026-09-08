@@ -2,10 +2,14 @@
 pragma solidity ^0.8.28;
 
 /// @dev Minimal read-only interface onto the ENSv2 PermissionedRegistry
-/// functions QuotaAnchor needs. getResolver(label) is expiry-gated by the
-/// registry itself (returns address(0) once expired) -- confirmed against
-/// verified source, not assumed. hasRoles is NOT expiry-gated on its own,
-/// which is why both checks are needed, separately, in that order.
+/// functions QuotaAnchor needs. getResolver(label) is expiry-gated
+/// directly by the registry (returns address(0) once expired) --
+/// confirmed against verified source. hasRoles(tokenId, ...) is ALSO
+/// expiry-gated, but indirectly: the registry shifts the resource to
+/// eacVersionId + 1 once expired, a version nothing was ever granted a
+/// role on. Both checks are made anyway, separately, for legibility --
+/// see CLAUDE.md ("Making retirement permanent" / Layer 3) for the full
+/// story of getting this wrong on first read and how it was caught.
 interface IEnsRegistry {
     function getResolver(string calldata label) external view returns (address);
     function findTokenId(string calldata label) external view returns (uint256);
@@ -65,7 +69,7 @@ contract QuotaAnchor {
 
     event UnitsRetired(bytes32 indexed seasonId, uint256 grams, string lotRef, string hederaTxId);
 
-    event ParticipantRegistered(address indexed addr, string role);
+    event ParticipantRegistered(bytes32 indexed consortiumId, address indexed addr, string role);
 
     /// @notice A retirement account paid out grams it should only ever have
     /// received. Anchored by the relayer when it notices the account's
@@ -73,6 +77,15 @@ contract QuotaAnchor {
     /// UnitsRetired for it — evidence for the subgraph detector, not a
     /// promise this catches an outflow the moment it happens (see CLAUDE.md).
     event RetirementOutflowDetected(bytes32 indexed seasonId, uint256 grams, string hederaTxId);
+
+    /// @notice A Hedera mint transaction exists with no matching UnitsMinted
+    /// anchor event. Anchored by an off-chain reconciler that compares full
+    /// Hedera mirror-node mint history against this contract's own
+    /// UnitsMinted history — subgraphs can't call the mirror node directly
+    /// (mapping handlers are deterministic, no outbound HTTP), so this event
+    /// is the bridge: the reconciler is the actual detector, this contract
+    /// and the subgraph downstream of it just make the finding queryable.
+    event UnauthorizedMintDetected(bytes32 indexed seasonId, uint256 grams, string hederaTxId);
 
     modifier onlyRelayer() {
         require(msg.sender == relayer, "QuotaAnchor: caller is not the relayer");
@@ -166,8 +179,16 @@ contract QuotaAnchor {
         emit RetirementOutflowDetected(seasonId, grams, hederaTxId);
     }
 
-    function registerParticipant(address addr, string calldata role) external onlyRelayer {
-        emit ParticipantRegistered(addr, role);
+    function registerParticipant(bytes32 consortiumId, address addr, string calldata role) external onlyRelayer {
+        emit ParticipantRegistered(consortiumId, addr, role);
+    }
+
+    function recordUnauthorizedMint(
+        bytes32 seasonId,
+        uint256 grams,
+        string calldata hederaTxId
+    ) external onlyRelayer {
+        emit UnauthorizedMintDetected(seasonId, grams, hederaTxId);
     }
 
     /// @dev Plain decimal integer string to uint256. ENS text records for
