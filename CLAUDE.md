@@ -99,7 +99,7 @@ State this plainly in the README, don't overclaim trustlessness:
 
 - **ENS is the policy layer**: cap, yield ratios, season window, minter roles.
 - **QuotaAnchor (Sepolia) is the authorization record**: a mint is only legitimate if it has a matching ENS-authorized anchor event.
-- **The relayer is bound to ENS state** and refuses to mint otherwise.
+- **The relayer is bound to ENS state** and refuses to mint otherwise — demonstrated three ways under Status, not just described here: mints when authorized, refuses without touching the contract when the role is revoked, and refuses again once the season expires, isolating each check from the other.
 - **The subgraph is the detector**: it reconciles Hedera mirror-node mint history against anchor events, so any unauthorized mint is publicly visible.
 - Explicit limitation: the Hedera `supplyKey` holder *could* mint without going through the relayer/ENS check — Hedera consensus has no knowledge of ENS or Sepolia, so that mint would still succeed on Hedera. It would, however, show up in subgraph reconciliation as a mint with no matching anchor event. We can't make unauthorized minting impossible; we make it impossible to hide.
 - Same framing for retirement-account outflows, with two mechanisms that are **not equivalent coverage** — don't let them read as interchangeable in any doc:
@@ -110,7 +110,7 @@ State this plainly in the README, don't overclaim trustlessness:
 
 - Full asset lifecycle: issuance, compliance-controlled transfer, transformation, retirement — with KYC/freeze controls, a custom fee schedule, and (planned) HCS mirroring alongside HTS.
 - One shared subgraph schema indexing multiple consortia through a single query pattern, backed by a real Subgraph Studio deployment (project slug: `quota`) — no mocked data.
-- ENS must be central to authorization, not decorative. Kill test: delete ENS state and the system stops functioning — no mint authorization, no season boundaries, no cap values, no participant identity.
+- ENS must be central to authorization, not decorative. Kill test: delete ENS state and the system stops functioning — no mint authorization, no season boundaries, no cap values, no participant identity. Proven, not just designed for: see Layer 3 and Status.
 
 ## Architecture — three layers
 
@@ -126,7 +126,7 @@ One HTS fungible token per consortium-season.
 - The cap is enforced by Hedera consensus, not our code. Do not reimplement it in Solidity.
 
 **Layer 2 — public accountability, Ethereum Sepolia.**
-`QuotaAnchor.sol` — deployed and verified (Etherscan, Blockscout, Sourcify): [`0x86b0A1F99D56830248622a3866457fA59442abdc`](https://sepolia.etherscan.io/address/0x86b0A1F99D56830248622a3866457fA59442abdc#code) (`QUOTA_ANCHOR_ADDRESS` in `.env`). Stores almost nothing — the only state is `relayer`, the immutable address (`onlyRelayer` modifier) allowed to call any of the event-emitting functions, set once at construction and never rotatable. Without this, anyone could emit fabricated anchor events for Hedera transaction IDs that never happened. Records the events the subgraph indexes:
+`QuotaAnchor.sol` — deployed and verified (Etherscan, Blockscout, Sourcify): [`0xD844dF6A6A15ce24dB99b65A45311070506F8A9B`](https://sepolia.etherscan.io/address/0xD844dF6A6A15ce24dB99b65A45311070506F8A9B#code) (`QUOTA_ANCHOR_ADDRESS` in `.env`). Prior address `0x86b0A1F99D56830248622a3866457fA59442abdc` is `QUOTA_ANCHOR_ADDRESS_V1_DEPRECATED` — superseded when the ENS read closed the TODO below, not a mistake requiring cleanup. Stores almost nothing: the immutable `relayer` address (`onlyRelayer` modifier, set once at construction, never rotatable — without this anyone could emit fabricated anchor events for Hedera transaction IDs that never happened), plus one small struct per season (`seasonEns` mapping: parent registry, label, resolver, node) recording where to look on ENS, set once at `openSeason` and read — never re-supplied by the caller — on every later `recordMint`. Everything else is emit-only. Events:
 ```
 SeasonOpened(consortiumId, year, capGrams, hederaTokenId, ensNode)
 UnitsMinted(seasonId, to, grams, hederaTxId)
@@ -134,25 +134,33 @@ UnitsTransferred(seasonId, from, to, grams)
 Transformed(inputSeasonId, inputGrams, outputSeasonId, outputGrams, productType, yieldBp)
 UnitsRetired(seasonId, grams, lotRef, hederaTxId)
 ParticipantRegistered(addr, role)
-RetirementOutflowDetected(seasonId, grams, hederaTxId)   // 7th event, added for the tripwire below -- see Trust boundaries
+RetirementOutflowDetected(seasonId, grams, hederaTxId)   // 7th event, added for the tripwire -- see Trust boundaries
 ```
-`openSeason`'s `capGrams` is caller-supplied, explicitly marked `TODO(ENS)` in the contract, and not enforced by the contract — it must not quietly become the permanent source of truth once Layer 3 exists to read it from ENS instead.
+`openSeason`'s `capGrams` is now read live from the resolver (`quota.cap.g`, parsed as a plain decimal string -- no float parsing) at anchor time, not caller-supplied. Confirmed by decoding the actual `SeasonOpened` event after running it, not just by the code reading correctly: `capGrams = 3400000000`.
 
-A small synchronous relayer (`scripts/relayer.mjs`) performs the HTS operation, then writes the anchor event. Keep it dumb: no queue, no retries. If the Hedera leg succeeds and the anchor leg fails, it logs loudly and exits non-zero rather than swallowing the mismatch — see the exact end-to-end proof under Status. Implemented today: `open-season` (anchor-only) and `mint`. Not yet: `transfer`, `retire`, `transform`, `registerParticipant` — the contract functions exist, the relayer doesn't call them yet.
+`recordMint` takes a `certifier` address and checks two things on-chain, in that order, independently of whatever the relayer already checked off-chain: (1) `IEnsRegistry(parentRegistry).getResolver(label) != address(0)` -- does the season currently resolve; (2) `hasRoles(tokenId, MINTER_ROLE, certifier)` -- does the certifier hold the role. These are separate checks, not one, because they have different expiry behavior -- see Layer 3 below.
 
-**Layer 3 — ENS v2 on Sepolia, load-bearing, not decoration.**
+A small synchronous relayer (`scripts/relayer.mjs`) performs the HTS operation, then writes the anchor event. Keep it dumb: no queue, no retries. If the Hedera leg succeeds and the anchor leg fails, it logs loudly and exits non-zero rather than swallowing the mismatch. Before every `mint`, it also runs its own off-chain courtesy check (`checkSeasonAuthorization`) mirroring the contract's two checks -- if either fails, it refuses without sending any transaction at all, which is what "no contract was touched" actually looks like in proof (b) under Status. Implemented today: `open-season` and `mint`. Not yet: `transfer`, `retire`, `transform`, `registerParticipant` — the contract functions exist, the relayer doesn't call them yet.
+
+**Layer 3 — ENS v2 on Sepolia, load-bearing, not decoration. Live on Sepolia testnet, not aspirational.**
 ```
-quota.eth
- └── bronte.quota.eth          consortium, holds its own key
-     ├── 2026.bronte.quota.eth season, EXPIRES at harvest close
-     │    └── lot-0412.2026...  lot
-     └── rossi.bronte.quota...  participant, NON-transferable
+quota.eth                              0xbdc85dd5...4f2c4f0e2's ETHRegistrar, paid in MockDAI
+ └── bronte.quota.eth                  consortium, owns its own subregistry
+     ├── 2026.bronte.quota.eth         season, real expiry (see Status for the value used and why)
+     └── rossi.bronte.quota.eth        participant, registered with no ROLE_CAN_TRANSFER_ADMIN
 ```
-Four load-bearing mechanisms:
-1. Season subname **expiry is the mint window** — the relayer resolves the season name and refuses to mint if it no longer resolves. No timer, no `closeSeason()` — the authority to mint simply ceases to exist (as a policy fact the relayer honors; see Trust boundaries for what this does and doesn't guarantee at Hedera consensus).
-2. **EAC grants a MINTER role scoped to the season name.** The consortium delegates to a certifier without handing over keys. Revocation is instant and scoped to one season.
-3. **Resolver text records are the canonical parameters.** QuotaAnchor reads the cap from the resolver rather than storing it: `quota.unit = "g"`, `quota.cap.g`, `quota.token.hedera`, `quota.yield.kernel.bp`, `quota.yield.cream.bp`. Basis points, never decimal strings — no float parsing anywhere.
-4. **Participant subnames are non-transferable** and gate KYC grants on the Hedera token. You cannot sell your place in the supply chain.
+Addresses in `.env`: `ENS_QUOTA_REGISTRY_ADDRESS` (quota.eth's own subregistry), `ENS_RESOLVER_ADDRESS` (one shared instance -- `text()` takes `node` as a parameter, so one resolver instance serves every node in the tree), `ENS_BRONTE_REGISTRY_ADDRESS` (bronte's own subregistry, holds the season and participant names), `ENS_SEASON_TOKEN_ID` (the season's EAC resource), `ENS_CERTIFIER_ADDRESS` (a generated test address -- never used to sign anything; QuotaAnchor only ever checks whether it holds a role, so it needs no private key at all).
+
+Four load-bearing mechanisms, each confirmed against verified on-chain source, not assumed from docs:
+1. **Season subname expiry is the mint window** — confirmed asymmetric and non-obvious: `getResolver(label)`/`getSubregistry(label)` (string-label lookups) are expiry-gated by the registry itself (return the zero address once expired), but raw `hasRoles(tokenId, role, account)` is **not** -- role bits stay in storage regardless of expiry. QuotaAnchor's resolution check (`getResolver != 0`) is therefore the entire mint window, with no timer and no `closeSeason()` anywhere in this codebase -- the authority to mint simply stops existing once real wall-clock time passes the expiry stored on ENS, checked passively on read, not by any scheduled job.
+2. **EAC grants a MINTER role scoped to the season name.** Custom bit, not part of ENSv2's own `RegistryRolesLib` — `MINTER_ROLE = 1 << 40` (nybble 10, confirmed unused by reading the verified `RegistryRolesLib.sol` source before picking it, not guessed). Must match exactly between `ens/roles.mjs`, `scripts/relayer.mjs`, and the contract's `MINTER_ROLE` constant — there's no single source of truth for this value across three languages/files, which is a real maintenance risk worth fixing if this project continues (see Open decisions).
+3. **Resolver text records are the canonical parameters**, set and read back from the resolver directly (not just trusted from the write): `quota.unit = "g"`, `quota.cap.g = "3400000000"`, `quota.token.hedera = "0.0.10411251"`, `quota.yield.kernel.bp = "4500"`, `quota.yield.cream.bp = "4000"`. QuotaAnchor reads `quota.cap.g` on-chain via a small decimal-string parser (`_parseUint`) -- basis points and grams, never decimal strings with a `.` in them, no float parsing anywhere in the whole stack.
+4. **Participant subnames are non-transferable**, confirmed against source: `PermissionedRegistry._update()` (the ERC1155 transfer hook) reverts with `TransferDisallowed` unless the current owner holds `ROLE_CAN_TRANSFER_ADMIN` on their own token. `rossi.bronte.quota.eth` was registered with roleBitmap `0` -- no special code, just omitting one bit, and the registry itself makes the name unsellable.
+
+**Registration mechanics, found empirically, not from docs:**
+- Registration on this ENSv2 Sepolia beta pays in a mock ERC20 (`MockDAI`, `0x5472c5725a00b7ba11f0794a79d08ade6f4683bd`), not ETH. `getRegisterPrice(label, duration, address(0))` reverts with `PaymentTokenNotSupported(address)` -- confirmed by decoding the actual error selector against the rent price oracle's ABI, not guessed. `MockDAI.mint(address,uint256)` is public (it's an explicit testnet faucet token). Flow: mint, approve, `commit()`, wait `MIN_COMMITMENT_AGE` (60s), `register()`.
+- Registering a name under `.eth` requires supplying a subregistry and resolver address at registration time, which means deploying your own `PermissionedRegistry`/`PermissionedResolverImpl` proxy instances (via `VerifiableFactory.deployProxy`) *before* the registration call, not after.
+- All ABIs and role-bit constants used throughout `ens/` were pulled from Etherscan's `getabi`/`getsourcecode` API against the live, verified Sepolia contracts (see `ens/abi/*.abi.json`), not from ens-contracts GitHub source or documentation, to guarantee an exact match with what's actually deployed on this beta.
 
 ## Repo layout
 
@@ -210,18 +218,21 @@ quota/
     - `0.0.10422087` (`HEDERA_DEPRECATED_DISCARDEDKEY_RETIREMENT_ACCOUNT_ID` in `.env`, no key — it really was discarded) — 1 gram, the discarded-key approach, rejected on principle (unverifiable claim) rather than for a technical flaw.
   - Incidental leftover accounts from investigation, no ongoing purpose, not tracked in `.env`: `0.0.10422047` (permanently stranded — unassociated, key discarded, see the auto-association/KYC finding below), `0.0.10422250` (normal spendable key, holds 1 gram, created while testing whether `AccountUpdateTransaction` could rekey to something unspendable — it can't).
   - The 25,000 grams in the canonical retirement account (`0.0.10422283`) predate `QuotaAnchor` and were never anchored — this is why the relayer's tripwire currently reports "anchored total: 0, actual: 25,000" (a surplus, not a shortfall, so it stays quiet; the tripwire only fires when actual is *lower* than anchored). Not a bug — anchoring didn't exist yet when that retirement happened.
-- Layer 2: `QuotaAnchor.sol` deployed and verified on Sepolia — `0x86b0A1F99D56830248622a3866457fA59442abdc` (`QUOTA_ANCHOR_ADDRESS` in `.env`; deployment block in `QUOTA_ANCHOR_DEPLOY_BLOCK`). Deployer wallet doubles as `relayer`. Full event set live, including the 7th event (`RetirementOutflowDetected`) — see Architecture and Trust boundaries above.
-- `scripts/relayer.mjs` built and run end to end for `open-season` and `mint`:
-  - `open-season`: anchored `SeasonOpened` (Sepolia tx `0xdc5c5fab360874173129aa3b04036011919feb897fe537142d677e1476638500`).
-  - `mint 1`: Hedera `TokenMintTransaction` (tx `0.0.10323351@1788876544.297593495`, type `TOKEN MINT`, status `SUCCESS`) then anchored on Sepolia (tx `0x778427d8a18f267b21ab885919c6ba25494d27ae7bd1374b6237d5ed5c7e2540`). Decoded the emitted `UnitsMinted` event directly from the transaction's logs via the contract ABI (not just read off Etherscan's UI): `hederaTxId` field is `"0.0.10323351@1788876544.297593495"` — matches the real Hedera transaction exactly.
-  - Retirement tripwire ran on both invocations, reported quiet (see gotcha above for why).
+- Layer 2: `QuotaAnchor.sol` (v1, capGrams caller-supplied) deployed and verified — `0x86b0A1F99D56830248622a3866457fA59442abdc`, now `QUOTA_ANCHOR_ADDRESS_V1_DEPRECATED`. Redeployed (v2, ENS read closed) at `0xD844dF6A6A15ce24dB99b65A45311070506F8A9B` = `QUOTA_ANCHOR_ADDRESS`, deployment block in `QUOTA_ANCHOR_DEPLOY_BLOCK`. Deployer wallet doubles as `relayer`. Full event set live, including the 7th event (`RetirementOutflowDetected`).
+- Layer 3: full ENS v2 hierarchy registered on Sepolia — see Architecture above for addresses, mechanisms, and the two non-obvious findings (MockDAI payment, expiry-gating asymmetry between `getResolver`/`getSubregistry` and `hasRoles`).
+- `scripts/relayer.mjs`, run end to end against the v2 contract:
+  - `open-season`: anchored `SeasonOpened` reading `capGrams` live from ENS (Sepolia tx `0xcde6ed3dcde9d941fe82a49d31d42a5d5cb9f274eea6cb35e27ae5c79e2f9890`) — decoded the event afterward and confirmed `capGrams = 3400000000`, not just trusted the code to have worked.
+  - **Proof (a)**, certifier mints: season resolved, certifier held `MINTER`, Hedera `TokenMintTransaction` SUCCESS, Sepolia anchor SUCCESS (tx `0xc01d34711e0f1f881b4c9fddb4d182fbccbf0eb43d699c77e224928b004c3993`).
+  - **Proof (b)**, role revoked (`ens/grant-minter.mjs revoke`): same `mint` command, relayer's off-chain check refused with `"REFUSED: ... does not hold MINTER role for this season. No transaction sent."` — process exited 1 before any Hedera or Sepolia call was made. Genuinely "no contract touched," not a contract-level revert.
+  - **Proof (c)**, past expiry: role re-granted first (`ens/grant-minter.mjs grant`) specifically to isolate this from proof (b) — otherwise a failure here would be ambiguous between "still revoked" and "expired." See below for the result once the season's real expiry passed.
+  - Retirement tripwire ran on every invocation, reported quiet throughout (see gotcha on the 25,000-gram surplus above).
 
 ### Not yet built
-- Layer 3: ENS subname registration, EAC role grants, resolver text records (`ens/` is currently just a placeholder).
-- Subgraph schema and mappings (`subgraph/` is currently just a placeholder) — this is the actual outflow/mint detector; the relayer's tripwire is not a substitute for it (see Trust boundaries).
+- Subgraph schema and mappings (`subgraph/` is currently just a placeholder) — this is the actual outflow/mint detector; the relayer's tripwire and off-chain ENS check are not substitutes for it (see Trust boundaries).
 - Relayer operations for `transfer`, `retire`, `transform`, `registerParticipant` — contract functions exist, relayer doesn't call them yet.
 - Transformation flow end to end (input units retired, derived units minted on a separate token) — the retirement primitive it depends on is built, the relayer operation and the second token aren't.
-- Distinct `supplyKey`/`kycKey`/`freezeKey` — currently all one operator key; a real consortium deployment would split these so a certifier can hold a scoped minting role without also controlling freeze/KYC.
+- Lot-level subnames under the season (e.g. `lot-0412.2026.bronte.quota.eth`) — the season was registered as a leaf (no subregistry) since nothing needed one for today's proof.
+- Distinct `supplyKey`/`kycKey`/`freezeKey` on the Hedera token — currently all one operator key; a real consortium deployment would split these so a certifier can hold a scoped minting role without also controlling freeze/KYC. (Note this is now somewhat superseded in spirit by the ENS `MINTER` role, which already scopes certifier authority without touching Hedera keys at all.)
 - Dashboard app, fraud-gap radar script, seed data for multiple consortia.
 
 ### Known gotchas
@@ -235,7 +246,14 @@ quota/
 - `TokenGrantKycTransaction` requires the target account to already be associated with the token (`TOKEN_NOT_ASSOCIATED_TO_ACCOUNT` otherwise), and `TokenAssociateTransaction` always requires the account's own signature — no exception, even with `setMaxAutomaticTokenAssociations` set. Auto-association only fires as a side effect of a *successful* transfer, and a transfer to a not-yet-KYC'd account fails first (`ACCOUNT_KYC_NOT_GRANTED_FOR_TOKEN`), so for a KYC-gated token there's no way to bootstrap an account into holding it without signing an explicit association at least once. Applies to every account this project ever creates to hold QUOTA units, not just retirement accounts.
 - `TokenFreezeTransaction` blocks transfers in *both* directions, not just outbound — noted for the record from the now-superseded freeze-based retirement prototype; not verified by us directly and not relevant to the current retirement mechanism.
 - "We generated a key and discarded it" is not an acceptable design for anything user-facing in this project, even though it works mechanically — it reintroduces exactly the kind of unverifiable trust claim the product exists to remove. Prefer deterministic/published or otherwise independently verifiable constructions.
+- ENSv2 Sepolia beta registration pays in `MockDAI`, not ETH — `getRegisterPrice(..., address(0))` reverts `PaymentTokenNotSupported`. `MockDAI.mint()` is public.
+- `.eth` registration requires a subregistry and resolver address *at* the `register()` call — deploy your own `VerifiableFactory.deployProxy` instances first, not after.
+- `PermissionedRegistry.getResolver(label)`/`getSubregistry(label)` (string-label lookups) are expiry-gated (return zero once expired); raw `hasRoles(tokenId, role, account)` is not. Two genuinely different checks, not one — QuotaAnchor makes both, separately.
+- `PermissionedRegistry._update()` reverts `TransferDisallowed` unless the current owner holds `ROLE_CAN_TRANSFER_ADMIN` on their own token — the mechanism behind non-transferable participant subnames, confirmed in source rather than assumed.
+- `MINTER_ROLE = 1 << 40` must be kept in sync by hand across `ens/roles.mjs`, `scripts/relayer.mjs`, and `QuotaAnchor.sol`'s constant — no single source of truth for this value. A drift here fails silently as "certifier lacks role" rather than a clear error.
 
 ### Open decisions
-- When (or whether, for the testnet build) to split `supplyKey`/`kycKey`/`freezeKey` into separate keys instead of reusing the operator key.
+- When (or whether, for the testnet build) to split `supplyKey`/`kycKey`/`freezeKey` into separate keys instead of reusing the operator key — partially superseded by the ENS `MINTER` role, which already gives scoped certifier authority without touching Hedera keys.
 - How per-season retirement-account provisioning gets triggered in the actual product: one deterministic retirement account per consortium-season, keyed off the season's token ID, is the decided design (see Making retirement permanent), but nothing yet automates creating one when a season opens — today it's a manually run script.
+- Same manual-provisioning gap applies to ENS: opening a new season today means running `ens/deploy-registry.mjs` and `ens/register-subname.mjs` by hand with the right arguments in the right order. Nothing automates "consortium opens a new season" end to end yet.
+- `MINTER_ROLE`'s hand-synced constant (see gotcha above) should probably become a single generated/shared value if this project grows past one season.
