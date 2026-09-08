@@ -33,6 +33,7 @@ type Season @entity(immutable: false) {
   transformationsAsInput: [Transformation!]! @derivedFrom(field: "inputSeason")
   transformationsAsOutput: [Transformation!]! @derivedFrom(field: "outputSeason")
   unauthorizedMints: [UnauthorizedMint!]! @derivedFrom(field: "season")
+  unauthorizedRetirementOutflows: [UnauthorizedRetirementOutflow!]! @derivedFrom(field: "season")
 }
 
 type Participant @entity(immutable: false) {
