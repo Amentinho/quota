@@ -102,6 +102,9 @@ State this plainly in the README, don't overclaim trustlessness:
 - **The relayer is bound to ENS state** and refuses to mint otherwise.
 - **The subgraph is the detector**: it reconciles Hedera mirror-node mint history against anchor events, so any unauthorized mint is publicly visible.
 - Explicit limitation: the Hedera `supplyKey` holder *could* mint without going through the relayer/ENS check — Hedera consensus has no knowledge of ENS or Sepolia, so that mint would still succeed on Hedera. It would, however, show up in subgraph reconciliation as a mint with no matching anchor event. We can't make unauthorized minting impossible; we make it impossible to hide.
+- Same framing for retirement-account outflows, with two mechanisms that are **not equivalent coverage** — don't let them read as interchangeable in any doc:
+  - **The subgraph is the actual detector.** Continuously reconciles full Hedera mirror-node history per retirement account against every `UnitsRetired` anchor event once built. Catches an outflow regardless of timing.
+  - **The relayer's tripwire (`checkRetirementTripwire` in `scripts/relayer.mjs`) is opportunistic, not the detector.** Compares current balance to anchored total, only at the moment the relayer happens to run for some unrelated reason. No schedule, no continuous watch. An outflow immediately followed by a covering inflow before the relayer's next invocation would pass through unflagged by the tripwire specifically — the subgraph would still catch it independently, from full history rather than a point-in-time snapshot.
 
 ## Design requirements
 
@@ -123,7 +126,7 @@ One HTS fungible token per consortium-season.
 - The cap is enforced by Hedera consensus, not our code. Do not reimplement it in Solidity.
 
 **Layer 2 — public accountability, Ethereum Sepolia.**
-`QuotaAnchor.sol` records the events the subgraph indexes:
+`QuotaAnchor.sol` — deployed and verified (Etherscan, Blockscout, Sourcify): [`0x86b0A1F99D56830248622a3866457fA59442abdc`](https://sepolia.etherscan.io/address/0x86b0A1F99D56830248622a3866457fA59442abdc#code) (`QUOTA_ANCHOR_ADDRESS` in `.env`). Stores almost nothing — the only state is `relayer`, the immutable address (`onlyRelayer` modifier) allowed to call any of the event-emitting functions, set once at construction and never rotatable. Without this, anyone could emit fabricated anchor events for Hedera transaction IDs that never happened. Records the events the subgraph indexes:
 ```
 SeasonOpened(consortiumId, year, capGrams, hederaTokenId, ensNode)
 UnitsMinted(seasonId, to, grams, hederaTxId)
@@ -131,8 +134,11 @@ UnitsTransferred(seasonId, from, to, grams)
 Transformed(inputSeasonId, inputGrams, outputSeasonId, outputGrams, productType, yieldBp)
 UnitsRetired(seasonId, grams, lotRef, hederaTxId)
 ParticipantRegistered(addr, role)
+RetirementOutflowDetected(seasonId, grams, hederaTxId)   // 7th event, added for the tripwire below -- see Trust boundaries
 ```
-A small synchronous relayer performs the HTS operation, checks ENS state first, then writes the anchor event. Keep it dumb.
+`openSeason`'s `capGrams` is caller-supplied, explicitly marked `TODO(ENS)` in the contract, and not enforced by the contract — it must not quietly become the permanent source of truth once Layer 3 exists to read it from ENS instead.
+
+A small synchronous relayer (`scripts/relayer.mjs`) performs the HTS operation, then writes the anchor event. Keep it dumb: no queue, no retries. If the Hedera leg succeeds and the anchor leg fails, it logs loudly and exits non-zero rather than swallowing the mismatch — see the exact end-to-end proof under Status. Implemented today: `open-season` (anchor-only) and `mint`. Not yet: `transfer`, `retire`, `transform`, `registerParticipant` — the contract functions exist, the relayer doesn't call them yet.
 
 **Layer 3 — ENS v2 on Sepolia, load-bearing, not decoration.**
 ```
@@ -203,19 +209,26 @@ quota/
     - `0.0.10421765` (`HEDERA_DEPRECATED_FROZEN_RETIREMENT_ACCOUNT_ID`/`_KEY` in `.env`) — 50,000 grams, frozen via `freezeKey`. The freeze-based approach.
     - `0.0.10422087` (`HEDERA_DEPRECATED_DISCARDEDKEY_RETIREMENT_ACCOUNT_ID` in `.env`, no key — it really was discarded) — 1 gram, the discarded-key approach, rejected on principle (unverifiable claim) rather than for a technical flaw.
   - Incidental leftover accounts from investigation, no ongoing purpose, not tracked in `.env`: `0.0.10422047` (permanently stranded — unassociated, key discarded, see the auto-association/KYC finding below), `0.0.10422250` (normal spendable key, holds 1 gram, created while testing whether `AccountUpdateTransaction` could rekey to something unspendable — it can't).
+  - The 25,000 grams in the canonical retirement account (`0.0.10422283`) predate `QuotaAnchor` and were never anchored — this is why the relayer's tripwire currently reports "anchored total: 0, actual: 25,000" (a surplus, not a shortfall, so it stays quiet; the tripwire only fires when actual is *lower* than anchored). Not a bug — anchoring didn't exist yet when that retirement happened.
+- Layer 2: `QuotaAnchor.sol` deployed and verified on Sepolia — `0x86b0A1F99D56830248622a3866457fA59442abdc` (`QUOTA_ANCHOR_ADDRESS` in `.env`; deployment block in `QUOTA_ANCHOR_DEPLOY_BLOCK`). Deployer wallet doubles as `relayer`. Full event set live, including the 7th event (`RetirementOutflowDetected`) — see Architecture and Trust boundaries above.
+- `scripts/relayer.mjs` built and run end to end for `open-season` and `mint`:
+  - `open-season`: anchored `SeasonOpened` (Sepolia tx `0xdc5c5fab360874173129aa3b04036011919feb897fe537142d677e1476638500`).
+  - `mint 1`: Hedera `TokenMintTransaction` (tx `0.0.10323351@1788876544.297593495`, type `TOKEN MINT`, status `SUCCESS`) then anchored on Sepolia (tx `0x778427d8a18f267b21ab885919c6ba25494d27ae7bd1374b6237d5ed5c7e2540`). Decoded the emitted `UnitsMinted` event directly from the transaction's logs via the contract ABI (not just read off Etherscan's UI): `hederaTxId` field is `"0.0.10323351@1788876544.297593495"` — matches the real Hedera transaction exactly.
+  - Retirement tripwire ran on both invocations, reported quiet (see gotcha above for why).
 
 ### Not yet built
-- Layer 2: `QuotaAnchor.sol` (`contracts/` is currently just a placeholder).
 - Layer 3: ENS subname registration, EAC role grants, resolver text records (`ens/` is currently just a placeholder).
-- Subgraph schema and mappings (`subgraph/` is currently just a placeholder).
-- Relayer script that binds a Hedera mint call to ENS state before executing it.
-- Transformation flow (input units retired, derived units minted on a separate token) — not yet implemented; the retirement primitive it depends on is now built.
+- Subgraph schema and mappings (`subgraph/` is currently just a placeholder) — this is the actual outflow/mint detector; the relayer's tripwire is not a substitute for it (see Trust boundaries).
+- Relayer operations for `transfer`, `retire`, `transform`, `registerParticipant` — contract functions exist, relayer doesn't call them yet.
+- Transformation flow end to end (input units retired, derived units minted on a separate token) — the retirement primitive it depends on is built, the relayer operation and the second token aren't.
 - Distinct `supplyKey`/`kycKey`/`freezeKey` — currently all one operator key; a real consortium deployment would split these so a certifier can hold a scoped minting role without also controlling freeze/KYC.
 - Dashboard app, fraud-gap radar script, seed data for multiple consortia.
 
 ### Known gotchas
 - `Client.forTestnet()` keeps the Node process alive unless `.close()` is called explicitly.
 - Hardhat 3 requires ESM (`"type": "module"`) and a `hardhat.config.ts` using `defineConfig` — a `.js`/`.mjs` config fails with `HHE3`.
+- The public Sepolia RPC (`ethereum-sepolia-rpc.publicnode.com`) caps `eth_getLogs` at a 50,000-block range. Querying event history from block 0 fails outright (`exceed maximum block range: 50000`) once the chain is taller than that — always pass `fromBlock` starting at `QUOTA_ANCHOR_DEPLOY_BLOCK`, never 0.
+- HashScan transaction URLs are `https://hashscan.io/testnet/transaction/{account-id}-{seconds}-{nanos}` — keep the dots in the account ID, only replace `@` and the timestamp's internal `.` with `-`. Verified against a real transaction page; an earlier guess (dashing every character) produced "Invalid transaction id".
 - `gh` CLI is broken on this machine (wrong CPU architecture); git operations go over SSH with a dedicated key, not HTTPS/gh.
 - Without an `adminKey`, the token's `kycKey`/`freezeKey`/fee schedule can never be changed after creation — deliberate (immutability is the point), but any mistake in those parameters at creation time is permanent for this token.
 - Hedera validates account-key satisfiability everywhere a key can be set, not just at creation: an empty `KeyList` fails with `KEY_REQUIRED`, a `KeyList` whose threshold exceeds its member count fails with `INVALID_ADMIN_KEY` — on `AccountCreateTransaction` and on `AccountUpdateTransaction` alike. Settled: there is no way to construct a genuinely unspendable account on Hedera. Don't re-investigate this.

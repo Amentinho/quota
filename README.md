@@ -96,7 +96,7 @@ Each consortium-season gets its own retirement account under this scheme (the de
 Three layers, deliberately kept separate:
 
 - **Layer 1 — the asset**, on Hedera testnet. One HTS fungible token per consortium-season, `FINITE` supply, `maxSupply` set once in grams at creation, no admin/wipe/pause keys. The cap is enforced by Hedera consensus, not by our code. The token carries a fixed transfer fee denominated in HBAR (never in origin units — a fee paid in grams would destroy supply on every transfer, which is exactly the conservation law this token exists to prove). There is no `feeScheduleKey`, so the fee is immutable for the same reason the cap is: nothing about the token's terms can move after creation. On testnet the fee collector is our own operator account for simplicity; in a real consortium deployment it would be the consortium's own treasury account.
-- **Layer 2 — public accountability**, on Ethereum Sepolia. `QuotaAnchor.sol` records mint/transfer/transform/retire events for indexing.
+- **Layer 2 — public accountability**, on Ethereum Sepolia. `QuotaAnchor.sol` records mint/transfer/transform/retire events for indexing. Deployed and verified: [`0x86b0A1F99D56830248622a3866457fA59442abdc`](https://sepolia.etherscan.io/address/0x86b0A1F99D56830248622a3866457fA59442abdc#code). It stores almost nothing — the only state is the immutable `relayer` address allowed to call it; everything else is emit-only. The cap it records at season open is explicitly not authoritative (see the `TODO(ENS)` in the contract itself) — it's caller-supplied until Layer 3 exists to read it from ENS.
 - **Layer 3 — ENS v2 on Sepolia**, load-bearing. Season subname expiry is the mint window. Enhanced Access Control scopes minter delegation to a single season. Resolver text records are the canonical cap and yield-ratio parameters. Participant subnames are non-transferable and gate KYC.
 
 Full design detail lives in [`CLAUDE.md`](CLAUDE.md).
@@ -112,9 +112,13 @@ We designed QUOTA around prevention where we can get it, and detection where we 
 
 One limitation we want to be explicit about: the Hedera account holding the token's `supplyKey` could mint directly, bypassing the relayer and ENS entirely — Hedera consensus has no knowledge of ENS or of Sepolia, so nothing on the Hedera side can technically stop that. What QUOTA guarantees is not that this is impossible, but that it cannot be hidden: an unauthorized mint would show up immediately in the subgraph as a mint with no corresponding anchor event.
 
+The same framing applies to retirement-account outflows (see "Making retirement permanent" above — the retirement key is public by design, so an outflow is a real possibility, not a hypothetical one). Two different things catch it, and they are not equivalent coverage:
+- **The subgraph is the actual detector.** Once built, it continuously reconciles full Hedera mirror-node transaction history for each retirement account against every `UnitsRetired` anchor event, so any outflow is caught regardless of when it happened or whether anything else runs afterward.
+- **The relayer's balance check is an opportunistic tripwire, not the detector.** It compares a retirement account's current mirror-node balance against its anchored total, but only at the moment the relayer happens to be invoked for some other reason. It has no schedule and isn't watching continuously — an outflow that's later covered by a subsequent inflow before the relayer's next run could pass through unflagged by the tripwire specifically. The subgraph would still catch it independently once it exists, from the full history rather than a point-in-time balance.
+
 ## Status
 
-Layer 1 — the Hedera asset, its core invariant, and the retirement mechanism — is implemented and verified on testnet. Layers 2 (the Sepolia accountability contract) and 3 (the ENS v2 policy layer) are not yet implemented. See [`CLAUDE.md`](CLAUDE.md) for the current build breakdown.
+Layer 1 — the Hedera asset, its core invariant, and the retirement mechanism — is implemented and verified on testnet. Layer 2's `QuotaAnchor.sol` is deployed and verified on Sepolia, with an end-to-end mint proven through the relayer (Hedera transaction and matching Sepolia anchor event, `hederaTxId` field matching exactly). Layer 3 (the ENS v2 policy layer) and the subgraph detector are not yet implemented. See [`CLAUDE.md`](CLAUDE.md) for the current build breakdown.
 
 ## License
 
