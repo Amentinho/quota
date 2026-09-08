@@ -141,6 +141,8 @@ A different message than proof (b) — confirming this is genuinely the resoluti
 
 No one revoked anything, closed the season, or touched the contract between (a) and (c). Time passed, and the authority to mint stopped existing.
 
+**A note on the expiry window itself:** the proof above used a 30-minute expiry so all three proofs, including waiting past expiry, could run inside one session. The mechanism is exactly the same regardless of duration — the season was re-registered afterward with a 60-day expiry (covering the rest of the build), and in production this would be set to the real harvest-close date. Nothing about *how* expiry gates minting depends on how far out it's set.
+
 ## Architecture
 
 Three layers, deliberately kept separate:
