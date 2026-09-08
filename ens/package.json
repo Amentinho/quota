@@ -1,0 +1,17 @@
+{
+  "name": "quota-ens",
+  "version": "1.0.0",
+  "description": "Subname registration, EAC role grants, and resolver text records — the policy layer (Layer 3): cap, yield ratios, season window, minter roles. Not yet implemented.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "private": "true",
+  "dependencies": {
+    "ethers": "^6.17.0"
+  }
+}
