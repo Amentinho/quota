@@ -11,7 +11,7 @@ npx graph auth <deploy key>
 npx graph deploy quota
 ```
 
-All four succeed. Live endpoint: **`https://api.studio.thegraph.com/query/1758548/quota/v0.0.1`**. A judge needs only that URL — no API key, no wallet, no local setup — to run the three example queries in the top-level README against real indexed data. Check `{ _meta { block { number } hasIndexingErrors } }` first if the numbers look stale; it should be within a few blocks of Sepolia's current head, with `hasIndexingErrors: false`.
+All four succeed. Live endpoint: **`https://api.studio.thegraph.com/query/1758548/quota/v0.0.2`**. A judge needs only that URL — no API key, no wallet, no local setup — to run the three example queries in the top-level README against real indexed data. Check `{ _meta { block { number } hasIndexingErrors } }` first if the numbers look stale; it should be within a few blocks of Sepolia's current head, with `hasIndexingErrors: false`.
 
 ## Schema
 

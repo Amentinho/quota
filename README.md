@@ -149,13 +149,13 @@ One shared GraphQL schema, deployed to Subgraph Studio (project slug `quota`) on
 
 **How Hedera mirror-node data gets into a subgraph at all — a design decision, not an afterthought.** Subgraph mappings are deterministic, sandboxed WASM: they react to events on the indexed chain and cannot make outbound HTTP calls to an arbitrary REST API. There's no way for this subgraph to reach Hedera's mirror node directly. So the actual reconciliation happens off-chain, in `scripts/relayer.mjs`'s `reconcile-mints` command: it fetches the full Hedera mint history for the token, fetches the full `UnitsMinted` anchor history from every `QuotaAnchor` address ever deployed, and anchors a new `UnauthorizedMintDetected` event for any Hedera mint with no matching anchor anywhere. The subgraph indexes *that* event — it never talks to Hedera. The off-chain reconciler is the actual detector; the subgraph is what makes its findings queryable. (Same story, same code path, for `RetirementOutflowDetected` — the retirement tripwire from earlier in this build.)
 
-**Two real bugs, found by running the reconciler, not by inspection.** First run compared Hedera's mint history against only the *current* `QuotaAnchor` address — every mint anchored against a now-superseded address (this project redeployed the contract several times over the build, each time for a real reason: closing the ENS TODO, adding the detector event, fixing a missing `seasonId`) came back as a false "unauthorized." Fixed by checking every deployed address's history, which is the correct design regardless of redeploy count. Second run *still* produced false positives: the transaction-ID normalizer used chained non-global `.replace()` calls, which only touch the first `.` in a `0.0.x` account ID — the same mistake as an earlier HashScan URL bug in this project, this time in a new place. Rewrote it as an explicit regex, verified independently, then reran.
+**Three real bugs, found by running the reconciler, not by inspection.** First run compared Hedera's mint history against only the *current* `QuotaAnchor` address — every mint anchored against a now-superseded address (this project redeployed the contract several times over the build, each time for a real reason: closing the ENS TODO, adding the detector event, fixing a missing `seasonId`, adding lot tracking) came back as a false "unauthorized." Fixed by checking every deployed address's history, which is the correct design regardless of redeploy count. Second run *still* produced false positives: the transaction-ID normalizer used chained non-global `.replace()` calls, which only touch the first `.` in a `0.0.x` account ID — the same mistake as an earlier HashScan URL bug in this project, this time in a new place. Rewrote it as an explicit regex, verified independently, then reran. Third bug, found later: redeploying with a *changed event signature* (v7 added `lotRef` to `UnitsMinted`) changes that event's topic hash, so querying an older deployment with the newer ABI silently returns zero logs for it rather than erroring — every pre-v7 mint would have looked unmatched again. Fixed by giving each historical deployment its own ABI fragment matching what it actually emits.
 
-**Clean result, verified:** minted 1 gram legitimately through the relayer (anchored), then minted 1 gram directly via Hedera SDK bypassing the relayer entirely (`scripts/mint-bypassing-relayer.mjs` — a permanent testing tool, not a throwaway), simulating a genuine unauthorized mint. The reconciler flagged exactly the bypass mint and correctly recognized every legitimately-anchored mint, including ones anchored against three different historical contract addresses.
+**Clean result, verified, including a real mistake caught by the very detector this project built:** one legitimate mint through the relayer, one deliberate bypass mint via `scripts/mint-bypassing-relayer.mjs` (a permanent testing tool, simulating a genuine unauthorized mint) — plus two accidental unanchored mints made while re-opening the harvest season on a fresh contract deployment, left in rather than cleaned up. The reconciler flagged all three correctly and recognized every legitimately-anchored mint across every historical contract address.
 
 ### Three queries against the live endpoint
 
-**Live endpoint:** `https://api.studio.thegraph.com/query/1758548/quota/v0.0.1`
+**Live endpoint:** `https://api.studio.thegraph.com/query/1758548/quota/v0.0.2`
 
 That's all a judge needs — no API key, no wallet, nothing to install. POST any of the three queries below as JSON (`{"query": "..."}`) to that URL, or paste them into Subgraph Studio's own in-browser playground for the `quota` subgraph. If you want to sanity-check freshness first: `{ _meta { block { number } hasIndexingErrors } }` should show `hasIndexingErrors: false` and a block number close to Sepolia's current head.
 
@@ -177,7 +177,7 @@ query SeasonLifecycle {
   }
 }
 ```
-Real returned JSON:
+Real returned JSON — both seasons this consortium has opened, harvest and the derived kernel product, same query shape for each:
 ```json
 {
   "data": {
@@ -185,12 +185,22 @@ Real returned JSON:
       "id": "0x15b5c6738cfb5e2b01ba96ceeaa44f6d9c1f657b4f24f5df918008069f036c4c",
       "seasons": [
         {
+          "id": "0xa3a9424b15d3b3de2818cd4323cc8839989fa5deb7659db78756e4e1561a08d1",
+          "year": "2026",
+          "hederaTokenId": "0.0.10434455",
+          "capGrams": "1530000000",
+          "mintedGrams": "450",
+          "retiredGrams": "450",
+          "inCirculationGrams": "0",
+          "utilisationBp": "0"
+        },
+        {
           "id": "0xa4baff5b7d3e9ce47e3883640443c4f96c3c9d5ab41ef2d6fb111aa877680d46",
           "year": "2026",
           "hederaTokenId": "0.0.10411251",
           "capGrams": "3400000000",
-          "mintedGrams": "1",
-          "retiredGrams": "1",
+          "mintedGrams": "1000",
+          "retiredGrams": "1000",
           "inCirculationGrams": "0",
           "utilisationBp": "0"
         }
@@ -199,7 +209,7 @@ Real returned JSON:
   }
 }
 ```
-`mintedGrams` counts only the legitimately anchored mint — the bypass mint below is deliberately excluded from it and surfaced as a fraud finding instead, not folded into the legitimate total.
+`mintedGrams` counts only legitimately anchored mints — the unauthorized ones below are deliberately excluded from it and surfaced as fraud findings instead, never folded into the legitimate total. The kernel season's 450g is the real output of transforming the harvest season's 1000g at the 4500bp ratio declared on ENS — see "Transformation, made real" below.
 
 **2. Fraud findings — both detector paths, for one consortium. This is the one a judge should check first.**
 ```graphql
@@ -222,7 +232,7 @@ query FraudFindings {
   }
 }
 ```
-Real returned JSON — the bypass mint from `scripts/mint-bypassing-relayer.mjs`, caught by the reconciler with no help from us pointing at it:
+Real returned JSON — three findings, caught by the reconciler with no help from us pointing at them: the deliberate bypass mint from `scripts/mint-bypassing-relayer.mjs`, plus two genuinely accidental unanchored mints made while re-opening the harvest season on a freshly redeployed contract (left in rather than tidied away — see CLAUDE.md):
 ```json
 {
   "data": {
@@ -232,10 +242,22 @@ Real returned JSON — the bypass mint from `scripts/mint-bypassing-relayer.mjs`
           "id": "0xa4baff5b7d3e9ce47e3883640443c4f96c3c9d5ab41ef2d6fb111aa877680d46",
           "unauthorizedMints": [
             {
+              "grams": "1000",
+              "hederaTxId": "0.0.10323351-1788942883-550678980",
+              "blockTimestamp": "1788943068",
+              "transactionHash": "0x28925701b54bb78b8ac910d1efd94b0b2121f085231d2aacfd01cb3dad829d90"
+            },
+            {
+              "grams": "1000",
+              "hederaTxId": "0.0.10323351-1788942893-476657317",
+              "blockTimestamp": "1788943080",
+              "transactionHash": "0x9cc964b4c6b00103647254f826494509d6b33cef807893f0a602e5fb536e4639"
+            },
+            {
               "grams": "1",
               "hederaTxId": "0.0.10323351-1788884980-415990532",
-              "blockTimestamp": "1788885228",
-              "transactionHash": "0xb6e3ef6745caf2dd4058e4cf844d2a300131d25e511d1375d602d84e6132ba93"
+              "blockTimestamp": "1788943056",
+              "transactionHash": "0xdb5c7062c3e2d5cbaea85eab0c53b4703541a600c45d6f9bb5caf09a66a9ef8e"
             }
           ],
           "unauthorizedRetirementOutflows": []
@@ -246,56 +268,84 @@ Real returned JSON — the bypass mint from `scripts/mint-bypassing-relayer.mjs`
 }
 ```
 
-**3. Retirement traceability — lots and what's been retired against them.**
+**3. Lot traceability — a real lot's full journey, harvest through retirement.** `lots(where: { lotRef })` returns every `Lot` entity sharing that reference — one per season it ever touched, joined by `Transformation`:
 ```graphql
-query RetirementsBySeason {
-  season(id: "0xa4baff5b7d3e9ce47e3883640443c4f96c3c9d5ab41ef2d6fb111aa877680d46") {
+query LotJourney {
+  lots(where: { lotRef: "lot-2026-003" }) {
     id
-    lots {
-      id
-      lotRef
-      totalRetiredGrams
-      retirements {
-        grams
-        hederaTxId
-        blockTimestamp
-      }
-    }
+    season { id hederaTokenId }
+    lotRef
+    totalRetiredGrams
+    mints { grams hederaTxId }
+    retirements { grams hederaTxId }
+    transformationsAsInput { inputGrams outputGrams productType yieldBp }
+    transformationsAsOutput { inputGrams outputGrams productType yieldBp }
   }
 }
 ```
-Real returned JSON:
+Real returned JSON — two `Lot` entities for the same `lotRef`, one per season it passed through:
 ```json
 {
   "data": {
-    "season": {
-      "id": "0xa4baff5b7d3e9ce47e3883640443c4f96c3c9d5ab41ef2d6fb111aa877680d46",
-      "lots": [
-        {
-          "id": "0xa4baff5b7d3e9ce47e3883640443c4f96c3c9d5ab41ef2d6fb111aa877680d46-lot-2026-001",
-          "lotRef": "lot-2026-001",
-          "totalRetiredGrams": "1",
-          "retirements": [
-            {
-              "grams": "1",
-              "hederaTxId": "0.0.10323351@1788940797.654282607"
-            }
-          ]
-        }
-      ]
-    }
+    "lots": [
+      {
+        "id": "0xa3a9424b15d3b3de2818cd4323cc8839989fa5deb7659db78756e4e1561a08d1-lot-2026-003",
+        "season": { "id": "0xa3a9424b15d3b3de2818cd4323cc8839989fa5deb7659db78756e4e1561a08d1", "hederaTokenId": "0.0.10434455" },
+        "lotRef": "lot-2026-003",
+        "totalRetiredGrams": "450",
+        "mints": [{ "grams": "450", "hederaTxId": "0.0.10323351@1788942980.158307800" }],
+        "retirements": [{ "grams": "450", "hederaTxId": "0.0.10323351@1788943011.642245160" }],
+        "transformationsAsInput": [],
+        "transformationsAsOutput": [{ "inputGrams": "1000", "outputGrams": "450", "productType": "kernel", "yieldBp": "4500" }]
+      },
+      {
+        "id": "0xa4baff5b7d3e9ce47e3883640443c4f96c3c9d5ab41ef2d6fb111aa877680d46-lot-2026-003",
+        "season": { "id": "0xa4baff5b7d3e9ce47e3883640443c4f96c3c9d5ab41ef2d6fb111aa877680d46", "hederaTokenId": "0.0.10411251" },
+        "lotRef": "lot-2026-003",
+        "totalRetiredGrams": "1000",
+        "mints": [{ "grams": "1000", "hederaTxId": "0.0.10323351@1788942927.387159127" }],
+        "retirements": [{ "grams": "1000", "hederaTxId": "0.0.10323351@1788942982.430440378" }],
+        "transformationsAsInput": [{ "inputGrams": "1000", "outputGrams": "450", "productType": "kernel", "yieldBp": "4500" }],
+        "transformationsAsOutput": []
+      }
+    ]
   }
 }
 ```
-This lot's one retirement (and the `grower` participant behind it) came from actually calling the relayer's `retire`/`register-participant` commands — real Hedera transfer, real Sepolia anchor, not seed data written to make the query non-empty.
+Every gram here is conserved and checkable: 1000g minted at harvest, 1000g retired as transformation input, 450g minted as kernel output (exactly 1000g × 4500bp, floored), 450g retired as the finished product. See "Transformation, made real" and the dashboard's Chain view for the full step-by-step version of this same lot.
+
+## Transformation, made real
+
+A conservation-law system that only tracks harvest units isn't proving much — the harder claim is that mass balances across *processing*, where a harvest input becomes a different, smaller-quantity retail product at a declared ratio. This required real new infrastructure, not just a UI: a second Hedera token for the derived product (kernel), its own retirement account, a second ENS season (`kernel-2026.bronte.quota.eth`) with its own cap, and a contract change.
+
+**The ratio is enforced on-chain now, not just computed.** Before this, `recordTransform` took a caller-supplied `yieldBp` and trusted it — the arithmetic was correct, but nothing stopped a bad `yieldBp` from being passed in. `QuotaAnchor` v7 reads `quota.yield.kernel.bp` live from ENS on every call, computes the ceiling itself, and takes a caller-*claimed* `outputGrams` instead of a caller-claimed ratio:
+```
+Claim 500g output from 1000g input (real ceiling is 450g): reverts "QuotaAnchor: output exceeds yield ceiling"
+Claim 450g output from 1000g input (exactly the ceiling):   succeeds
+```
+No Hedera token is touched on the failing call — the relayer checks the ceiling on Sepolia first, before any real value moves, so a bad claim costs nothing to unwind.
+
+**Input units are retired, not burned**, same principle as the harvest token: a real Hedera transfer moves the input grams to the harvest retirement account before the output is minted. Consumption is never destruction in this system, for either the harvest or the derived product.
+
+**One real lot, run end to end, no seed data:** `mint 1000g` → `transfer 1000g` → `transform` (rejected once, then accepted at 450g) → input 1000g retired → output 450g minted → output 450g retired. Every step above is a real transaction with a real Hedera or Sepolia tx ID — see query 3 above or the dashboard's Chain view for the full trace.
+
+## The dashboard
+
+A Vite + React + TypeScript + Tailwind app (`app/`) reading directly from the live subgraph endpoint and directly from Sepolia (a public, keyless RPC — no backend, nothing to keep secret). Three views:
+- **Solvency** — per consortium, per season: cap, minted, retired, in circulation, with detector findings shown inline next to the figures they qualify, not behind a separate tab.
+- **Chain** — a real lot's journey: harvest mint, transfer, transformation (with the yield ratio the contract actually enforced), retirement — grams shown at every step.
+- **Season** — the ENS name, its expiry, its text records, and current `MINTER` role holders, all read live from Sepolia, not cached and not from the subgraph.
+
+Live at: *(added once deployed — see Status)*.
 
 ## Architecture
 
-Three layers, deliberately kept separate:
+Four layers, deliberately kept separate:
 
-- **Layer 1 — the asset**, on Hedera testnet. One HTS fungible token per consortium-season, `FINITE` supply, `maxSupply` set once in grams at creation, no admin/wipe/pause keys. The cap is enforced by Hedera consensus, not by our code. The token carries a fixed transfer fee denominated in HBAR (never in origin units — a fee paid in grams would destroy supply on every transfer, which is exactly the conservation law this token exists to prove). There is no `feeScheduleKey`, so the fee is immutable for the same reason the cap is: nothing about the token's terms can move after creation. On testnet the fee collector is our own operator account for simplicity; in a real consortium deployment it would be the consortium's own treasury account.
-- **Layer 2 — public accountability**, on Ethereum Sepolia. `QuotaAnchor.sol` records mint/transfer/transform/retire events for indexing. Deployed and verified: [`0x39F0Fded796cB5323048a15b907CcE38979EDa2c`](https://sepolia.etherscan.io/address/0x39F0Fded796cB5323048a15b907CcE38979EDa2c#code). It stores almost nothing — the only state is the immutable `relayer` address allowed to call it, and one small struct per season recording where to look on ENS; everything else is emit-only. The cap it records at season open is read live from the resolver at mint-anchor time, not supplied by whoever calls the contract — see "ENS v2: making it load-bearing" below.
-- **Layer 3 — ENS v2 on Sepolia**, load-bearing, not decoration. `quota.eth` → `bronte.quota.eth` → `2026.bronte.quota.eth`, all live on Sepolia testnet. Season subname expiry is the mint window. Enhanced Access Control scopes a `MINTER` role to a single season. Resolver text records are the canonical cap and yield-ratio parameters, read on-chain by the contract itself. Participant subnames are non-transferable and gate KYC. Full detail and the three-part proof below.
+- **Layer 1 — the asset**, on Hedera testnet. One HTS fungible token per consortium-season, `FINITE` supply, `maxSupply` set once in grams at creation, no admin/wipe/pause keys. The cap is enforced by Hedera consensus, not by our code. The harvest token carries a fixed transfer fee denominated in HBAR (never in origin units — a fee paid in grams would destroy supply on every transfer, which is exactly the conservation law this token exists to prove). There is no `feeScheduleKey`, so the fee is immutable for the same reason the cap is: nothing about the token's terms can move after creation. On testnet the fee collector is our own operator account for simplicity; in a real consortium deployment it would be the consortium's own treasury account. A second token exists for the derived (kernel) product, same immutability properties, its `maxSupply` set to the harvest cap at the declared yield ratio.
+- **Layer 2 — public accountability**, on Ethereum Sepolia. `QuotaAnchor.sol` records mint/transfer/transform/retire events for indexing. Deployed and verified: [`0x13A0Bb73C5a629dF1a8c91F99213d6077cc1acE2`](https://sepolia.etherscan.io/address/0x13A0Bb73C5a629dF1a8c91F99213d6077cc1acE2#code) (Sourcify-verified; Etherscan verification submitted but stuck behind their API migration — see CLAUDE.md). It stores almost nothing — the only state is the immutable `relayer` address allowed to call it, and one small struct per season recording where to look on ENS; everything else is emit-only. The cap it records at season open, and the yield ratio it enforces at transform, are both read live from the resolver at anchor time — never supplied by whoever calls the contract. See "ENS v2: making it load-bearing" and "Transformation, made real" above.
+- **Layer 3 — ENS v2 on Sepolia**, load-bearing, not decoration. `quota.eth` → `bronte.quota.eth` → two seasons (`2026`, `kernel-2026`), all live on Sepolia testnet. Season subname expiry is the mint window. Enhanced Access Control scopes a `MINTER` role per season. Resolver text records are the canonical cap and yield-ratio parameters, read on-chain by the contract itself. Participant subnames are non-transferable and gate KYC. Full detail and the three-part proof below.
+- **Layer 4 — the dashboard**, reading Layers 2 and 3 live, no backend of its own. See "The dashboard" above.
 
 Full design detail lives in [`CLAUDE.md`](CLAUDE.md).
 
@@ -316,9 +366,11 @@ The same framing applies to retirement-account outflows (see "Making retirement 
 
 ## Status
 
-All three layers are implemented and verified on testnet. Layer 1: the Hedera asset, its core invariant, and the retirement mechanism. Layer 2: `QuotaAnchor.sol` deployed and verified on Sepolia, reading the cap live from ENS. Layer 3: `quota.eth` → `bronte.quota.eth` → `2026.bronte.quota.eth` registered and load-bearing, with the kill test proven three ways above.
+All four layers are implemented and verified on testnet. Layer 1: two Hedera assets (harvest and kernel), their core invariant, and both retirement mechanisms. Layer 2: `QuotaAnchor.sol` v7 deployed and verified on Sepolia, reading the cap and yield ratio live from ENS and enforcing the latter as an on-chain ceiling. Layer 3: `quota.eth` → `bronte.quota.eth` → two seasons, registered and load-bearing, with the kill test proven three ways above.
 
-The subgraph is deployed for real to Subgraph Studio and synced to chain head — live at `https://api.studio.thegraph.com/query/1758548/quota/v0.0.1`. The mint-reconciliation detector is built, run, and verified against a real bypass mint, visible in query 2 above. Retirement traceability (query 3) needed real on-chain data too, not seed data, so the relayer gained `retire` and `register-participant` commands and both were actually run before that query was considered done. See [`CLAUDE.md`](CLAUDE.md) for the current build breakdown.
+The subgraph is deployed for real to Subgraph Studio and synced to chain head — live at `https://api.studio.thegraph.com/query/1758548/quota/v0.0.2`. The mint-reconciliation detector is built, run, and verified against three real findings (one deliberate bypass, two accidental). One real lot has been run fully end to end — mint, transfer, transform (with a proven ceiling rejection), and retirement on both the input and output side — and is queryable via query 3 above.
+
+Layer 4, the dashboard, is built and verified locally (all three views, against the live endpoints above) but not yet deployed publicly — that needs a Vercel token this session doesn't have. See [`CLAUDE.md`](CLAUDE.md) for the current build breakdown.
 
 ## License
 

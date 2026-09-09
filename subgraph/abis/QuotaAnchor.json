@@ -138,9 +138,15 @@
       },
       {
         "indexed": false,
-        "internalType": "uint16",
+        "internalType": "uint256",
         "name": "yieldBp",
-        "type": "uint16"
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "lotRef",
+        "type": "string"
       }
     ],
     "name": "Transformed",
@@ -196,6 +202,12 @@
         "indexed": false,
         "internalType": "string",
         "name": "hederaTxId",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "lotRef",
         "type": "string"
       }
     ],
@@ -351,6 +363,11 @@
         "internalType": "address",
         "name": "certifier",
         "type": "address"
+      },
+      {
+        "internalType": "string",
+        "name": "lotRef",
+        "type": "string"
       }
     ],
     "name": "recordMint",
@@ -455,13 +472,18 @@
         "type": "bytes32"
       },
       {
-        "internalType": "uint16",
-        "name": "yieldBp",
-        "type": "uint16"
+        "internalType": "uint256",
+        "name": "outputGrams",
+        "type": "uint256"
       },
       {
         "internalType": "string",
         "name": "productType",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "lotRef",
         "type": "string"
       }
     ],

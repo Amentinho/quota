@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #faf9f6;
+  --surface: #ffffff;
+  --border: #e2e0d8;
+  --text: #1c1b18;
+  --text-muted: #6b6759;
+  --accent: #2f5d4f;
+  --accent-soft: #e6ece9;
+  --warn: #8a4a1f;
+  --warn-soft: #f5e9de;
+  --danger: #8a2323;
+  --danger-soft: #f6e4e0;
+  --mono: ui-monospace, "SF Mono", Consolas, monospace;
+  --sans: -apple-system, "Segoe UI", system-ui, Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+code,
+.tabular {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}

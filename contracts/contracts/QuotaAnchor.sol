@@ -55,17 +55,23 @@ contract QuotaAnchor {
         bytes32 ensNode
     );
 
-    event UnitsMinted(bytes32 indexed seasonId, address indexed to, uint256 grams, string hederaTxId);
+    event UnitsMinted(bytes32 indexed seasonId, address indexed to, uint256 grams, string hederaTxId, string lotRef);
 
     event UnitsTransferred(bytes32 indexed seasonId, address indexed from, address indexed to, uint256 grams);
 
+    /// @dev yieldBp is emitted for audit visibility but is never caller-
+    /// supplied -- recordTransform reads it live from the input season's ENS
+    /// resolver on every call (see recordTransform), so what's emitted here
+    /// is always what the contract itself just read and enforced, not a
+    /// claim passed in by whoever called it.
     event Transformed(
         bytes32 indexed inputSeasonId,
         uint256 inputGrams,
         bytes32 indexed outputSeasonId,
         uint256 outputGrams,
         string productType,
-        uint16 yieldBp
+        uint256 yieldBp,
+        string lotRef
     );
 
     event UnitsRetired(bytes32 indexed seasonId, uint256 grams, string lotRef, string hederaTxId);
@@ -122,7 +128,8 @@ contract QuotaAnchor {
         address to,
         uint256 grams,
         string calldata hederaTxId,
-        address certifier
+        address certifier,
+        string calldata lotRef
     ) external onlyRelayer {
         SeasonEnsConfig storage cfg = seasonEns[seasonId];
         require(cfg.resolver != address(0), "QuotaAnchor: unknown season");
@@ -143,24 +150,38 @@ contract QuotaAnchor {
             "QuotaAnchor: certifier lacks MINTER role for this season"
         );
 
-        emit UnitsMinted(seasonId, to, grams, hederaTxId);
+        emit UnitsMinted(seasonId, to, grams, hederaTxId, lotRef);
     }
 
     function recordTransfer(bytes32 seasonId, address from, address to, uint256 grams) external onlyRelayer {
         emit UnitsTransferred(seasonId, from, to, grams);
     }
 
+    /// @notice Records a transformation of inputGrams (input season/lot) into
+    /// a caller-claimed outputGrams (output season/lot), enforced against a
+    /// yield ceiling read live from ENS -- never caller-supplied, never
+    /// hardcoded. Reverts if the claim exceeds what the input season's own
+    /// ENS text record (quota.yield.<productType>.bp) permits, floor-divided
+    /// the same way every other conversion in this contract is: rounding up
+    /// would create units from nothing.
     function recordTransform(
         bytes32 inputSeasonId,
         uint256 inputGrams,
         bytes32 outputSeasonId,
-        uint16 yieldBp,
-        string calldata productType
+        uint256 outputGrams,
+        string calldata productType,
+        string calldata lotRef
     ) external onlyRelayer {
-        require(yieldBp <= 10000, "QuotaAnchor: yieldBp exceeds 10000");
-        // Floor division, always -- rounding up would create units from nothing.
-        uint256 outputGrams = (inputGrams * yieldBp) / 10000;
-        emit Transformed(inputSeasonId, inputGrams, outputSeasonId, outputGrams, productType, yieldBp);
+        SeasonEnsConfig storage cfg = seasonEns[inputSeasonId];
+        require(cfg.resolver != address(0), "QuotaAnchor: unknown input season");
+
+        uint256 yieldBp = _parseUint(
+            IEnsTextResolver(cfg.resolver).text(cfg.node, string.concat("quota.yield.", productType, ".bp"))
+        );
+        uint256 maxOutputGrams = (inputGrams * yieldBp) / 10000;
+        require(outputGrams <= maxOutputGrams, "QuotaAnchor: output exceeds yield ceiling");
+
+        emit Transformed(inputSeasonId, inputGrams, outputSeasonId, outputGrams, productType, yieldBp, lotRef);
     }
 
     function recordRetirement(

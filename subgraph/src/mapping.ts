@@ -2,6 +2,7 @@ import { BigInt, Bytes, log } from "@graphprotocol/graph-ts";
 import {
   SeasonOpened,
   UnitsMinted,
+  UnitsTransferred,
   Transformed,
   UnitsRetired,
   ParticipantRegistered,
@@ -13,6 +14,8 @@ import {
   Season,
   Participant,
   Lot,
+  Mint,
+  Transfer,
   Retirement,
   Transformation,
   UnauthorizedMint,
@@ -28,6 +31,24 @@ function loadOrCreateConsortium(id: Bytes): void {
     consortium = new Consortium(id);
     consortium.save();
   }
+}
+
+// Lot identity is (seasonId, lotRef) -- the same lotRef string in a
+// different season (e.g. the output product a lot becomes after
+// transformation) is a different Lot entity, linked via
+// Transformation.inputLot/outputLot. lotRef is assigned at mint time, so a
+// Lot can be created here before any retirement ever touches it.
+function loadOrCreateLot(seasonId: Bytes, lotRef: string): Lot {
+  let lotId = seasonId.toHexString() + "-" + lotRef;
+  let lot = Lot.load(lotId);
+  if (lot == null) {
+    lot = new Lot(lotId);
+    lot.season = seasonId;
+    lot.lotRef = lotRef;
+    lot.totalRetiredGrams = ZERO;
+    lot.save();
+  }
+  return lot as Lot;
 }
 
 // mintedGrams/retiredGrams are updated by the handlers below as events
@@ -67,6 +88,39 @@ export function handleUnitsMinted(event: UnitsMinted): void {
   season.mintedGrams = season.mintedGrams.plus(event.params.grams);
   recomputeSeasonAggregates(season);
   season.save();
+
+  let lot = loadOrCreateLot(event.params.seasonId, event.params.lotRef);
+
+  let id = event.transaction.hash.concatI32(event.logIndex.toI32());
+  let mint = new Mint(id);
+  mint.season = event.params.seasonId;
+  mint.lot = lot.id;
+  mint.to = event.params.to;
+  mint.grams = event.params.grams;
+  mint.hederaTxId = event.params.hederaTxId;
+  mint.blockTimestamp = event.block.timestamp;
+  mint.transactionHash = event.transaction.hash;
+  mint.save();
+}
+
+// Not lot-attributed at the contract level -- see schema.graphql's note on
+// Transfer -- so this just indexes the season-scoped custody change.
+export function handleUnitsTransferred(event: UnitsTransferred): void {
+  let season = Season.load(event.params.seasonId);
+  if (season == null) {
+    log.warning("UnitsTransferred for unknown season {}", [event.params.seasonId.toHexString()]);
+    return;
+  }
+
+  let id = event.transaction.hash.concatI32(event.logIndex.toI32());
+  let transfer = new Transfer(id);
+  transfer.season = event.params.seasonId;
+  transfer.from = event.params.from;
+  transfer.to = event.params.to;
+  transfer.grams = event.params.grams;
+  transfer.blockTimestamp = event.block.timestamp;
+  transfer.transactionHash = event.transaction.hash;
+  transfer.save();
 }
 
 export function handleUnitsRetired(event: UnitsRetired): void {
@@ -79,21 +133,14 @@ export function handleUnitsRetired(event: UnitsRetired): void {
   recomputeSeasonAggregates(season);
   season.save();
 
-  let lotId = event.params.seasonId.toHexString() + "-" + event.params.lotRef;
-  let lot = Lot.load(lotId);
-  if (lot == null) {
-    lot = new Lot(lotId);
-    lot.season = event.params.seasonId;
-    lot.lotRef = event.params.lotRef;
-    lot.totalRetiredGrams = ZERO;
-  }
+  let lot = loadOrCreateLot(event.params.seasonId, event.params.lotRef);
   lot.totalRetiredGrams = lot.totalRetiredGrams.plus(event.params.grams);
   lot.save();
 
   let retirementId = event.transaction.hash.concatI32(event.logIndex.toI32());
   let retirement = new Retirement(retirementId);
   retirement.season = event.params.seasonId;
-  retirement.lot = lotId;
+  retirement.lot = lot.id;
   retirement.grams = event.params.grams;
   retirement.hederaTxId = event.params.hederaTxId;
   retirement.blockTimestamp = event.block.timestamp;
@@ -101,12 +148,22 @@ export function handleUnitsRetired(event: UnitsRetired): void {
   retirement.save();
 }
 
+// inputLot and outputLot are two DIFFERENT Lot entities (different
+// seasons, same lotRef string) -- this is where a lot's identity crosses
+// from the input product's season into the output product's season.
+// yieldBp is always what the contract read live from ENS and enforced as
+// a ceiling, never caller-supplied -- see QuotaAnchor.recordTransform.
 export function handleTransformed(event: Transformed): void {
+  let inputLot = loadOrCreateLot(event.params.inputSeasonId, event.params.lotRef);
+  let outputLot = loadOrCreateLot(event.params.outputSeasonId, event.params.lotRef);
+
   let id = event.transaction.hash.concatI32(event.logIndex.toI32());
   let t = new Transformation(id);
   t.inputSeason = event.params.inputSeasonId;
+  t.inputLot = inputLot.id;
   t.inputGrams = event.params.inputGrams;
   t.outputSeason = event.params.outputSeasonId;
+  t.outputLot = outputLot.id;
   t.outputGrams = event.params.outputGrams;
   t.productType = event.params.productType;
   t.yieldBp = event.params.yieldBp;

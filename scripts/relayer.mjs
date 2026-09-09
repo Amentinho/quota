@@ -1,11 +1,15 @@
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { ethers } from "ethers";
 import { Client, PrivateKey, AccountId, TokenMintTransaction, TransferTransaction } from "@hashgraph/sdk";
 
 const hederaOperatorId = AccountId.fromString(process.env.HEDERA_OPERATOR_ID);
 const hederaOperatorKey = PrivateKey.fromStringDer(process.env.HEDERA_OPERATOR_KEY);
 const hederaTokenId = process.env.HEDERA_TOKEN_ID;
+const kernelTokenId = process.env.HEDERA_KERNEL_TOKEN_ID;
 const retirementAccountId = process.env.HEDERA_RETIREMENT_ACCOUNT_ID;
+const kernelRetirementAccountId = process.env.HEDERA_KERNEL_RETIREMENT_ACCOUNT_ID;
+const processorAccountId = process.env.HEDERA_PROCESSOR_ACCOUNT_ID;
 const hederaClient = Client.forTestnet().setOperator(hederaOperatorId, hederaOperatorKey);
 
 const provider = new ethers.JsonRpcProvider(process.env.SEPOLIA_RPC_URL);
@@ -25,30 +29,46 @@ const registryAbi = JSON.parse(
 );
 const bronteRegistry = new ethers.Contract(process.env.ENS_BRONTE_REGISTRY_ADDRESS, registryAbi, provider);
 
-// Known today because there's exactly one consortium and one season. Becomes
-// a real lookup once Layer 3 has more than one.
+// Known today because there's exactly one consortium. Becomes a real lookup
+// once Layer 3 has more than one.
 const CONSORTIUM_ID = ethers.id("bronte");
 const SEASON_ID = ethers.id("bronte-2026");
 const SEASON_LABEL = "2026";
+const KERNEL_SEASON_ID = ethers.id("bronte-2026-kernel");
+const KERNEL_SEASON_LABEL = "kernel-2026";
 const MINTER_ROLE = 1n << 40n; // must match ens/roles.mjs and the contract's MINTER_ROLE
+
+// Same derivation scheme as the retirement account (see CLAUDE.md, "Making
+// retirement permanent"), reused for the processor account that holds
+// harvest-token custody between transfer and transform. Recomputed here
+// rather than stored, exactly like the retirement account's key never is --
+// there is nothing secret about it.
+function deriveKey(seedInput) {
+  return PrivateKey.fromBytesED25519(createHash("sha256").update(seedInput).digest());
+}
+const processorKey = deriveKey(`QUOTA-PROCESSOR-${hederaTokenId}`);
 
 // Opportunistic tripwire, not the detector. The subgraph, reconciling full
 // Hedera mirror-node history against every anchor event, is what actually
-// catches an outflow. This only checks the retirement account's CURRENT
-// balance against anchored totals, and only when the relayer happens to run
-// for some other reason -- it does not watch continuously and can miss an
-// outflow that's later covered by a subsequent inflow before this ever runs.
-async function checkRetirementTripwire() {
-  console.log("Retirement tripwire: comparing anchored total to Hedera mirror-node balance...");
+// catches an outflow. This only checks each retirement account's CURRENT
+// balance against its own season's anchored total, and only when the
+// relayer happens to run for some other reason -- it does not watch
+// continuously and can miss an outflow that's later covered by a
+// subsequent inflow before this ever runs. Scoped per season/token/account
+// -- checking un-scoped (summing every UnitsRetired regardless of season)
+// would compare a harvest+kernel combined total against only one account's
+// balance the moment a second season starts retiring, producing a false
+// mismatch. Found while wiring up the kernel retirement account, fixed
+// before it was ever run against real kernel data.
+async function checkRetirementTripwireFor(seasonId, tokenId, accountId, label) {
+  console.log(`Retirement tripwire (${label}): comparing anchored total to Hedera mirror-node balance...`);
 
-  // fromBlock matters: the public RPC caps eth_getLogs at a 50,000-block
-  // range, so querying from block 0 fails outright on a chain this tall.
   const deployBlock = Number(process.env.QUOTA_ANCHOR_DEPLOY_BLOCK);
-  const events = await anchor.queryFilter(anchor.filters.UnitsRetired(), deployBlock);
+  const events = await anchor.queryFilter(anchor.filters.UnitsRetired(seasonId), deployBlock);
   const anchoredTotal = events.reduce((sum, e) => sum + e.args.grams, 0n);
 
   const res = await fetch(
-    `https://testnet.mirrornode.hedera.com/api/v1/tokens/${hederaTokenId}/balances?account.id=${retirementAccountId}`,
+    `https://testnet.mirrornode.hedera.com/api/v1/tokens/${tokenId}/balances?account.id=${accountId}`,
   );
   const data = await res.json();
   const actualBalance = BigInt(data.balances[0]?.balance ?? 0);
@@ -57,12 +77,19 @@ async function checkRetirementTripwire() {
 
   if (actualBalance < anchoredTotal) {
     const shortfall = anchoredTotal - actualBalance;
-    console.error(`RETIREMENT OUTFLOW DETECTED: shortfall of ${shortfall} grams.`);
-    const tx = await anchor.recordRetirementOutflow(SEASON_ID, shortfall, "unattributed");
+    console.error(`RETIREMENT OUTFLOW DETECTED (${label}): shortfall of ${shortfall} grams.`);
+    const tx = await anchor.recordRetirementOutflow(seasonId, shortfall, "unattributed");
     const receipt = await tx.wait();
     console.error("Anchored as RetirementOutflowDetected. Sepolia tx:", receipt.hash);
   } else {
     console.log("  no shortfall -- tripwire quiet this run.");
+  }
+}
+
+async function checkRetirementTripwire() {
+  await checkRetirementTripwireFor(SEASON_ID, hederaTokenId, retirementAccountId, "harvest");
+  if (kernelTokenId && kernelRetirementAccountId) {
+    await checkRetirementTripwireFor(KERNEL_SEASON_ID, kernelTokenId, kernelRetirementAccountId, "kernel");
   }
 }
 
@@ -88,6 +115,17 @@ function normalizeHederaTxId(id) {
   return `${account}-${seconds}-${nanos}`;
 }
 
+// UnitsMinted gained a 5th field (lotRef) in v7. That changes the event's
+// topic0 (keccak256 of its signature), so querying a pre-v7 deployment with
+// v7's ABI silently returns ZERO logs for it -- not an error, just a topic
+// that never matches anything actually emitted there. Every mint anchored
+// on v1-v6 would then look "unmatched" again -- a third reconciler bug,
+// this time from ABI drift across a signature-changing redeploy, not from
+// reconciliation logic itself. Fixed by querying each deployment with the
+// event shape IT actually emits, not whatever the current contract emits.
+const OLD_UNITS_MINTED_ABI = ["event UnitsMinted(bytes32 indexed seasonId, address indexed to, uint256 grams, string hederaTxId)"];
+const NEW_UNITS_MINTED_ABI = ["event UnitsMinted(bytes32 indexed seasonId, address indexed to, uint256 grams, string hederaTxId, string lotRef)"];
+
 // Every QuotaAnchor address this project has ever deployed, each a fresh
 // contract with its own empty event history. A reconciler that only checks
 // the CURRENT address would misreport every mint anchored against an
@@ -97,12 +135,13 @@ function normalizeHederaTxId(id) {
 // generalizes: "unauthorized" must mean "unanchored anywhere we've ever
 // anchored," not "unanchored on whichever address I happened to check."
 const ALL_ANCHOR_DEPLOYMENTS = [
-  { address: "0x86b0A1F99D56830248622a3866457fA59442abdc", deployBlock: 11661523 }, // v1
-  { address: "0xD844dF6A6A15ce24dB99b65A45311070506F8A9B", deployBlock: 11661839 }, // v2
-  { address: "0xeA5dD3615e97b3Bfe67f3819F2c80Ce4FB8106c4", deployBlock: 11662146 }, // v3
-  { address: "0xec7B4666c06dB283Cf5f58Bab7dEDFC522092832", deployBlock: 11662163 }, // v4
-  { address: "0x717DF23aB2f875E81F2646141A45c2db82513977", deployBlock: 11662208 }, // v5
-  { address: process.env.QUOTA_ANCHOR_ADDRESS, deployBlock: Number(process.env.QUOTA_ANCHOR_DEPLOY_BLOCK) }, // current
+  { address: "0x86b0A1F99D56830248622a3866457fA59442abdc", deployBlock: 11661523, abi: OLD_UNITS_MINTED_ABI }, // v1
+  { address: "0xD844dF6A6A15ce24dB99b65A45311070506F8A9B", deployBlock: 11661839, abi: OLD_UNITS_MINTED_ABI }, // v2
+  { address: "0xeA5dD3615e97b3Bfe67f3819F2c80Ce4FB8106c4", deployBlock: 11662146, abi: OLD_UNITS_MINTED_ABI }, // v3
+  { address: "0xec7B4666c06dB283Cf5f58Bab7dEDFC522092832", deployBlock: 11662163, abi: OLD_UNITS_MINTED_ABI }, // v4
+  { address: "0x717DF23aB2f875E81F2646141A45c2db82513977", deployBlock: 11662208, abi: OLD_UNITS_MINTED_ABI }, // v5
+  { address: "0x39F0Fded796cB5323048a15b907CcE38979EDa2c", deployBlock: 11662229, abi: OLD_UNITS_MINTED_ABI }, // v6
+  { address: process.env.QUOTA_ANCHOR_ADDRESS, deployBlock: Number(process.env.QUOTA_ANCHOR_DEPLOY_BLOCK), abi: NEW_UNITS_MINTED_ABI }, // v7, current
 ];
 
 // THE DETECTOR's bridge (see CLAUDE.md): subgraph mappings can't call the
@@ -139,12 +178,9 @@ async function reconcileMints() {
   }
   console.log(`  Hedera mirror node: ${mintTxs.length} mint transaction(s) for this token.`);
 
-  const artifact = JSON.parse(
-    readFileSync(new URL("../contracts/artifacts/contracts/QuotaAnchor.sol/QuotaAnchor.json", import.meta.url)),
-  );
   const anchoredTxIds = new Set();
-  for (const { address, deployBlock } of ALL_ANCHOR_DEPLOYMENTS) {
-    const c = new ethers.Contract(address, artifact.abi, provider);
+  for (const { address, deployBlock, abi } of ALL_ANCHOR_DEPLOYMENTS) {
+    const c = new ethers.Contract(address, abi, provider);
     const events = await c.queryFilter(c.filters.UnitsMinted(), deployBlock);
     for (const e of events) anchoredTxIds.add(normalizeHederaTxId(e.args.hederaTxId));
   }
@@ -165,19 +201,19 @@ async function reconcileMints() {
   }
 }
 
-async function doOpenSeason() {
-  console.log("Opening season -- cap will be read from ENS by the contract itself, not supplied here...");
-  const node = ethers.namehash("2026.bronte.quota.eth");
+async function doOpenSeason(seasonId, label, hederaTokenIdForSeason) {
+  console.log(`Opening season "${label}" -- cap will be read from ENS by the contract itself, not supplied here...`);
+  const node = ethers.namehash(`${label}.bronte.quota.eth`);
 
   const tx = await anchor.openSeason(
-    SEASON_ID,
+    seasonId,
     CONSORTIUM_ID,
     2026,
     process.env.ENS_BRONTE_REGISTRY_ADDRESS,
-    SEASON_LABEL,
+    label,
     process.env.ENS_RESOLVER_ADDRESS,
     node,
-    hederaTokenId,
+    hederaTokenIdForSeason,
   );
   const receipt = await tx.wait();
   console.log("SeasonOpened anchored. Sepolia tx:", receipt.hash);
@@ -187,30 +223,30 @@ async function doOpenSeason() {
 // resolve or the role is absent" -- an off-chain courtesy check so a bad
 // call never even reaches the contract, not a substitute for the contract's
 // own on-chain enforcement (which re-checks both independently).
-async function checkSeasonAuthorization(certifier) {
-  const resolverAddr = await bronteRegistry.getResolver(SEASON_LABEL);
+async function checkSeasonAuthorization(label, certifier) {
+  const resolverAddr = await bronteRegistry.getResolver(label);
   if (resolverAddr === ethers.ZeroAddress) {
     throw new Error(
-      `REFUSED: "${SEASON_LABEL}.bronte.quota.eth" does not resolve (expired or unregistered). No transaction sent.`,
+      `REFUSED: "${label}.bronte.quota.eth" does not resolve (expired or unregistered). No transaction sent.`,
     );
   }
 
-  const tokenId = await bronteRegistry.findTokenId(SEASON_LABEL);
+  const tokenId = await bronteRegistry.findTokenId(label);
   const hasMinterRole = await bronteRegistry.hasRoles(tokenId, MINTER_ROLE, certifier);
   if (!hasMinterRole) {
     throw new Error(
-      `REFUSED: ${certifier} does not hold MINTER role for this season. No transaction sent.`,
+      `REFUSED: ${certifier} does not hold MINTER role for "${label}". No transaction sent.`,
     );
   }
 
-  console.log(`  Season resolves (resolver ${resolverAddr}) and ${certifier} holds MINTER. Proceeding.`);
+  console.log(`  "${label}" resolves (resolver ${resolverAddr}) and ${certifier} holds MINTER. Proceeding.`);
 }
 
-async function doMint(grams, certifier) {
+async function doMint(grams, lotRef, certifier) {
   console.log(`Checking season authorization for certifier ${certifier}...`);
-  await checkSeasonAuthorization(certifier);
+  await checkSeasonAuthorization(SEASON_LABEL, certifier);
 
-  console.log(`Minting ${grams} grams on Hedera (token ${hederaTokenId})...`);
+  console.log(`Minting ${grams} grams on Hedera (token ${hederaTokenId}, lot ${lotRef})...`);
   const mintSubmit = await new TokenMintTransaction()
     .setTokenId(hederaTokenId)
     .setAmount(grams)
@@ -235,7 +271,7 @@ async function doMint(grams, certifier) {
 
   console.log("Anchoring on Sepolia...");
   try {
-    const tx = await anchor.recordMint(SEASON_ID, wallet.address, grams, hederaTxId, certifier);
+    const tx = await anchor.recordMint(SEASON_ID, wallet.address, grams, hederaTxId, certifier, lotRef);
     const receipt = await tx.wait();
     console.log("Anchored. Sepolia tx:", receipt.hash);
     console.log("Etherscan:", `https://sepolia.etherscan.io/tx/${receipt.hash}`);
@@ -249,6 +285,28 @@ async function doMint(grams, certifier) {
     process.exitCode = 1;
     throw err;
   }
+}
+
+// Custody transfer, harvest token: operator (treasury) -> the deterministic
+// processor account, ahead of transformation. Real Hedera transfer, then
+// anchored -- same do-the-Hedera-leg-first pattern as everything else here.
+async function doTransfer(grams) {
+  console.log(`Transferring ${grams} grams from operator to processor (${processorAccountId}) on Hedera...`);
+  const transferSubmit = await new TransferTransaction()
+    .addTokenTransfer(hederaTokenId, hederaOperatorId, -grams)
+    .addTokenTransfer(hederaTokenId, AccountId.fromString(processorAccountId), grams)
+    .execute(hederaClient);
+  const transferReceipt = await transferSubmit.getReceipt(hederaClient);
+  if (transferReceipt.status.toString() !== "SUCCESS") {
+    throw new Error(`Hedera transfer failed: ${transferReceipt.status.toString()}`);
+  }
+  console.log("Hedera transfer SUCCESS. Hedera tx ID:", transferSubmit.transactionId.toString());
+
+  console.log("Anchoring transfer on Sepolia...");
+  const tx = await anchor.recordTransfer(SEASON_ID, wallet.address, wallet.address, grams);
+  const receipt = await tx.wait();
+  console.log("UnitsTransferred anchored. Sepolia tx:", receipt.hash);
+  console.log("Etherscan:", `https://sepolia.etherscan.io/tx/${receipt.hash}`);
 }
 
 // Retirement is a real Hedera transfer to the dedicated retirement account
@@ -280,6 +338,94 @@ async function doRetire(grams, lotRef) {
   console.log("Etherscan:", `https://sepolia.etherscan.io/tx/${receipt.hash}`);
 }
 
+// Same as doRetire, for the OUTPUT product's own token and retirement
+// account -- the final step of a lot's journey, closing the loop on the
+// derived product the same way the harvest product closes.
+async function doRetireKernel(grams, lotRef) {
+  console.log(`Transferring ${grams} grams to kernel retirement account ${kernelRetirementAccountId} on Hedera...`);
+  const transferSubmit = await new TransferTransaction()
+    .addTokenTransfer(kernelTokenId, hederaOperatorId, -grams)
+    .addTokenTransfer(kernelTokenId, kernelRetirementAccountId, grams)
+    .execute(hederaClient);
+  const transferReceipt = await transferSubmit.getReceipt(hederaClient);
+
+  if (transferReceipt.status.toString() !== "SUCCESS") {
+    throw new Error(`Hedera kernel retirement transfer failed: ${transferReceipt.status.toString()}`);
+  }
+
+  const hederaTxId = transferSubmit.transactionId.toString();
+  console.log("Hedera transfer SUCCESS.");
+  console.log("Hedera tx ID:", hederaTxId);
+
+  console.log("Anchoring kernel retirement on Sepolia...");
+  const tx = await anchor.recordRetirement(KERNEL_SEASON_ID, grams, lotRef, hederaTxId);
+  const receipt = await tx.wait();
+  console.log("UnitsRetired anchored. Sepolia tx:", receipt.hash);
+  console.log("Etherscan:", `https://sepolia.etherscan.io/tx/${receipt.hash}`);
+}
+
+// The transformation itself. The ceiling check (recordTransform, which
+// reads yieldBp live from ENS and reverts if outputGrams exceeds what that
+// ratio permits) runs FIRST, on Sepolia, before any real Hedera token is
+// moved -- so a bad claim fails cleanly with nothing to unwind. Only after
+// that succeeds do the real Hedera legs run: input grams retired (processor
+// -> retirement, signed with the deterministic processor key, NOT burned),
+// output grams minted fresh on the kernel token, and both anchored.
+async function doTransform(inputGrams, outputGrams, lotRef, productType) {
+  console.log(
+    `Recording transform: ${inputGrams}g (lot ${lotRef}) -> claimed ${outputGrams}g ${productType}. Checking the yield ceiling on-chain first...`,
+  );
+  const transformTx = await anchor.recordTransform(
+    SEASON_ID,
+    inputGrams,
+    KERNEL_SEASON_ID,
+    outputGrams,
+    productType,
+    lotRef,
+  );
+  const transformReceipt = await transformTx.wait();
+  console.log("Transformed anchored -- ceiling held. Sepolia tx:", transformReceipt.hash);
+  console.log("Etherscan:", `https://sepolia.etherscan.io/tx/${transformReceipt.hash}`);
+
+  console.log(`Ceiling held. Retiring ${inputGrams}g of the input from the processor account (not burning)...`);
+  const inputRetireSigned = await new TransferTransaction()
+    .addTokenTransfer(hederaTokenId, AccountId.fromString(processorAccountId), -inputGrams)
+    .addTokenTransfer(hederaTokenId, retirementAccountId, inputGrams)
+    .freezeWith(hederaClient)
+    .sign(processorKey);
+  const inputRetireSubmit = await inputRetireSigned.execute(hederaClient);
+  const inputRetireReceipt = await inputRetireSubmit.getReceipt(hederaClient);
+  if (inputRetireReceipt.status.toString() !== "SUCCESS") {
+    throw new Error(`Input retirement transfer failed: ${inputRetireReceipt.status.toString()}`);
+  }
+  const inputHederaTxId = inputRetireSubmit.transactionId.toString();
+  console.log("Input retired on Hedera. Tx ID:", inputHederaTxId);
+
+  console.log(`Minting ${outputGrams}g of ${productType} on Hedera (token ${kernelTokenId})...`);
+  const outputMintSubmit = await new TokenMintTransaction()
+    .setTokenId(kernelTokenId)
+    .setAmount(outputGrams)
+    .execute(hederaClient);
+  const outputMintReceipt = await outputMintSubmit.getReceipt(hederaClient);
+  if (outputMintReceipt.status.toString() !== "SUCCESS") {
+    throw new Error(`Output mint failed: ${outputMintReceipt.status.toString()}`);
+  }
+  const outputHederaTxId = outputMintSubmit.transactionId.toString();
+  console.log("Output minted on Hedera. Tx ID:", outputHederaTxId);
+
+  console.log("Anchoring input retirement...");
+  const retireTx = await anchor.recordRetirement(SEASON_ID, inputGrams, lotRef, inputHederaTxId);
+  const retireReceipt = await retireTx.wait();
+  console.log("UnitsRetired (input) anchored. Sepolia tx:", retireReceipt.hash);
+
+  console.log("Anchoring output mint, through the same ENS-authorization path as any mint...");
+  const certifier = process.env.ENS_CERTIFIER_ADDRESS;
+  await checkSeasonAuthorization(KERNEL_SEASON_LABEL, certifier);
+  const mintTx = await anchor.recordMint(KERNEL_SEASON_ID, wallet.address, outputGrams, outputHederaTxId, certifier, lotRef);
+  const mintReceipt = await mintTx.wait();
+  console.log("UnitsMinted (output) anchored. Sepolia tx:", mintReceipt.hash);
+}
+
 async function doRegisterParticipant(addr, role) {
   console.log(`Registering participant ${addr} (role: ${role})...`);
   const tx = await anchor.registerParticipant(CONSORTIUM_ID, addr, role);
@@ -294,16 +440,34 @@ try {
   await checkRetirementTripwire();
 
   if (command === "open-season") {
-    await doOpenSeason();
+    await doOpenSeason(SEASON_ID, SEASON_LABEL, hederaTokenId);
+  } else if (command === "open-kernel-season") {
+    await doOpenSeason(KERNEL_SEASON_ID, KERNEL_SEASON_LABEL, kernelTokenId);
   } else if (command === "mint") {
     const grams = Number(args[0]);
-    const certifier = args[1] || process.env.ENS_CERTIFIER_ADDRESS;
-    if (!Number.isInteger(grams) || grams <= 0 || !certifier) {
-      throw new Error("Usage: node scripts/relayer.mjs mint <grams> [certifierAddress]");
+    const lotRef = args[1];
+    const certifier = args[2] || process.env.ENS_CERTIFIER_ADDRESS;
+    if (!Number.isInteger(grams) || grams <= 0 || !lotRef) {
+      throw new Error("Usage: node scripts/relayer.mjs mint <grams> <lotRef> [certifierAddress]");
     }
-    await doMint(grams, certifier);
+    await doMint(grams, lotRef, certifier);
   } else if (command === "reconcile-mints") {
     await reconcileMints();
+  } else if (command === "transfer") {
+    const grams = Number(args[0]);
+    if (!Number.isInteger(grams) || grams <= 0) {
+      throw new Error("Usage: node scripts/relayer.mjs transfer <grams>");
+    }
+    await doTransfer(grams);
+  } else if (command === "transform") {
+    const inputGrams = Number(args[0]);
+    const outputGrams = Number(args[1]);
+    const lotRef = args[2];
+    const productType = args[3] || "kernel";
+    if (!Number.isInteger(inputGrams) || inputGrams <= 0 || !Number.isInteger(outputGrams) || outputGrams <= 0 || !lotRef) {
+      throw new Error("Usage: node scripts/relayer.mjs transform <inputGrams> <outputGrams> <lotRef> [productType=kernel]");
+    }
+    await doTransform(inputGrams, outputGrams, lotRef, productType);
   } else if (command === "retire") {
     const grams = Number(args[0]);
     const lotRef = args[1];
@@ -311,6 +475,13 @@ try {
       throw new Error("Usage: node scripts/relayer.mjs retire <grams> <lotRef>");
     }
     await doRetire(grams, lotRef);
+  } else if (command === "retire-kernel") {
+    const grams = Number(args[0]);
+    const lotRef = args[1];
+    if (!Number.isInteger(grams) || grams <= 0 || !lotRef) {
+      throw new Error("Usage: node scripts/relayer.mjs retire-kernel <grams> <lotRef>");
+    }
+    await doRetireKernel(grams, lotRef);
   } else if (command === "register-participant") {
     const addr = args[0];
     const role = args[1];
@@ -320,7 +491,7 @@ try {
     await doRegisterParticipant(addr, role);
   } else {
     console.log(
-      "Usage: node scripts/relayer.mjs <open-season|mint|reconcile-mints|retire|register-participant> [args]",
+      "Usage: node scripts/relayer.mjs <open-season|open-kernel-season|mint|transfer|transform|retire|retire-kernel|reconcile-mints|register-participant> [args]",
     );
     process.exitCode = 1;
   }

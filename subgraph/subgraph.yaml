@@ -9,9 +9,9 @@ dataSources:
     name: QuotaAnchor
     network: sepolia
     source:
-      address: "0x39F0Fded796cB5323048a15b907CcE38979EDa2c"
+      address: "0x13A0Bb73C5a629dF1a8c91F99213d6077cc1acE2"
       abi: QuotaAnchor
-      startBlock: 11662229
+      startBlock: 11666764
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
@@ -21,6 +21,8 @@ dataSources:
         - Season
         - Participant
         - Lot
+        - Mint
+        - Transfer
         - Retirement
         - Transformation
         - UnauthorizedMint
@@ -31,9 +33,11 @@ dataSources:
       eventHandlers:
         - event: SeasonOpened(indexed bytes32,indexed bytes32,uint256,uint256,string,bytes32)
           handler: handleSeasonOpened
-        - event: UnitsMinted(indexed bytes32,indexed address,uint256,string)
+        - event: UnitsMinted(indexed bytes32,indexed address,uint256,string,string)
           handler: handleUnitsMinted
-        - event: Transformed(indexed bytes32,uint256,indexed bytes32,uint256,string,uint16)
+        - event: UnitsTransferred(indexed bytes32,indexed address,indexed address,uint256)
+          handler: handleUnitsTransferred
+        - event: Transformed(indexed bytes32,uint256,indexed bytes32,uint256,string,uint256,string)
           handler: handleTransformed
         - event: UnitsRetired(indexed bytes32,uint256,string,string)
           handler: handleUnitsRetired

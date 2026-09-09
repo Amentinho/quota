@@ -28,6 +28,8 @@ type Season @entity(immutable: false) {
   inCirculationGrams: BigInt! # mintedGrams - retiredGrams
   utilisationBp: BigInt! # floor(mintedGrams * 10000 / capGrams)
 
+  mints: [Mint!]! @derivedFrom(field: "season")
+  transfers: [Transfer!]! @derivedFrom(field: "season")
   lots: [Lot!]! @derivedFrom(field: "season")
   retirements: [Retirement!]! @derivedFrom(field: "season")
   transformationsAsInput: [Transformation!]! @derivedFrom(field: "inputSeason")
@@ -45,15 +47,56 @@ type Participant @entity(immutable: false) {
 }
 
 """
-A lot aggregates every retirement recorded against the same lotRef within a
-season -- a lotRef can be retired against more than once as it sells through.
+A lot aggregates everything anchored against the same lotRef within a
+season: the harvest mint that created it, transformations it went through
+(as input or as output, since a lot's identifier persists across the
+product it becomes), and retirements against it. A lotRef is scoped to one
+season -- the same lotRef in a different season (e.g. the derived-product
+season a lot's grams become after transformation) is a different Lot
+entity, linked to it via Transformation.inputLot/outputLot.
 """
 type Lot @entity(immutable: false) {
   id: String! # `${seasonId}-${lotRef}`
   season: Season!
   lotRef: String!
   totalRetiredGrams: BigInt!
+  mints: [Mint!]! @derivedFrom(field: "lot")
   retirements: [Retirement!]! @derivedFrom(field: "lot")
+  transformationsAsInput: [Transformation!]! @derivedFrom(field: "inputLot")
+  transformationsAsOutput: [Transformation!]! @derivedFrom(field: "outputLot")
+}
+
+"""
+The harvest (or output-product) mint that brings a lot into existence.
+lotRef is assigned at mint time -- a lot's identity starts here, not at
+retirement.
+"""
+type Mint @entity(immutable: true) {
+  id: Bytes! # tx hash + log index
+  season: Season!
+  lot: Lot!
+  to: Bytes!
+  grams: BigInt!
+  hederaTxId: String!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+"""
+A custody transfer within a season. Not lot-attributed at the contract
+level -- lotRef is only carried by Mint and Transformation -- so a
+transfer is shown alongside a lot's journey by season and time, not by a
+direct link. Honest about the granularity the underlying event actually
+has, rather than implying a precision the data doesn't carry.
+"""
+type Transfer @entity(immutable: true) {
+  id: Bytes! # tx hash + log index
+  season: Season!
+  from: Bytes!
+  to: Bytes!
+  grams: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
 }
 
 type Retirement @entity(immutable: true) {
@@ -66,14 +109,23 @@ type Retirement @entity(immutable: true) {
   transactionHash: Bytes!
 }
 
+"""
+inputLot and outputLot are two DIFFERENT Lot entities (different seasons,
+same lotRef string) -- a transformation is where a lot's identity crosses
+from the input product's season into the output product's season. yieldBp
+is always what the contract itself read live from ENS and enforced as a
+ceiling on outputGrams, never a caller-supplied value.
+"""
 type Transformation @entity(immutable: true) {
   id: Bytes! # tx hash + log index
   inputSeason: Season!
+  inputLot: Lot!
   inputGrams: BigInt!
   outputSeason: Season!
+  outputLot: Lot!
   outputGrams: BigInt!
   productType: String!
-  yieldBp: Int!
+  yieldBp: BigInt!
   blockTimestamp: BigInt!
   transactionHash: Bytes!
 }
