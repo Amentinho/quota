@@ -18,3 +18,21 @@ export function consortiumLabel(id: string): string {
 export function seasonLabel(id: string): string {
   return KNOWN_SEASON_NAMES[id.toLowerCase()] ?? id;
 }
+
+// The subgraph correctly flags every Hedera mint with no matching anchor --
+// but "unanchored" doesn't distinguish intent. These three are the only
+// findings that exist today; classified here from what we know about how
+// each one actually happened (see CLAUDE.md), not derivable from on-chain
+// data alone. A finding not in this map renders with no classification
+// badge, rather than guessing.
+export type DetectorFindingKind = "intentional-demo" | "pre-season-open";
+
+const KNOWN_FINDING_KINDS: Record<string, DetectorFindingKind> = {
+  "0.0.10323351-1788884980-415990532": "intentional-demo",
+  "0.0.10323351-1788942883-550678980": "pre-season-open",
+  "0.0.10323351-1788942893-476657317": "pre-season-open",
+};
+
+export function detectorFindingKind(hederaTxId: string): DetectorFindingKind | null {
+  return KNOWN_FINDING_KINDS[hederaTxId] ?? null;
+}
