@@ -1,6 +1,6 @@
 # ens
 
-Subname registration, EAC role grants, and resolver text records — the policy layer (Layer 3). Live on Sepolia testnet: `quota.eth` → `bronte.quota.eth` → `2026.bronte.quota.eth` (season) and `rossi.bronte.quota.eth` (participant, non-transferable). See CLAUDE.md for addresses and the two non-obvious findings from actually registering these (payment token, expiry-gating asymmetry).
+Subname registration, EAC role grants, and resolver text records — the policy layer (Layer 3). Live on Sepolia testnet: `quota.eth` → `bronte.quota.eth` → `2026.bronte.quota.eth` (harvest season), `kernel-2026.bronte.quota.eth` (derived-product season, its own cap and own `MINTER` grant), and `rossi.bronte.quota.eth` (participant, non-transferable). See CLAUDE.md for addresses and the non-obvious findings from actually registering these (payment token, expiry-gating asymmetry, and the role-bootstrap gap `kernel-2026`'s registration surfaced — see "Enforcing the yield ceiling on-chain").
 
 Run from the repo root so `--env-file` finds `.env`. Order matters — each script depends on state the previous one created:
 
@@ -22,7 +22,7 @@ Registers one subname directly on its parent's registry. `subregistry` is `none`
 ```
 node --env-file=.env ens/set-text-records.mjs
 ```
-Sets the season's canonical parameters on the shared resolver (`quota.unit`, `quota.cap.g`, `quota.token.hedera`, `quota.yield.kernel.bp`, `quota.yield.cream.bp`) and reads them back from the resolver to confirm, rather than trusting the write.
+Sets the harvest season's canonical parameters on the shared resolver (`quota.unit`, `quota.cap.g`, `quota.token.hedera`, `quota.yield.kernel.bp`, `quota.yield.cream.bp`) and reads them back from the resolver to confirm, rather than trusting the write. `ens/set-kernel-text-records.mjs` does the same for `kernel-2026.bronte.quota.eth` (its own `quota.cap.g` and `quota.token.hedera` — no yield records of its own, since yield is declared on the input season, not the output).
 
 ```
 node --env-file=.env ens/grant-minter.mjs <grant|revoke> <registryAddress> <resourceTokenId> <account>

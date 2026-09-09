@@ -1,6 +1,6 @@
 # hedera
 
-HTS scripts using `@hashgraph/sdk` (Layer 1): token creation, mint, retire, transformation. Currently implemented: token creation, the mint invariant-proof scripts, and the retirement mechanism below; transformation is not yet built.
+HTS scripts using `@hashgraph/sdk` (Layer 1): token creation, mint, retire, transformation. All implemented and run for real: token creation, the mint invariant-proof scripts, the retirement mechanism below, and — for the derived (kernel) product — a second token (`hedera/create-kernel-token.mjs`) with its own deterministic retirement account (`hedera/create-kernel-retirement-account.mjs`) and a deterministic processor account for in-transit custody (`hedera/create-deterministic-processor-account.mjs`), all driven end to end by `scripts/relayer.mjs`'s `transform`/`retire-kernel` commands — see CLAUDE.md, "Enforcing the yield ceiling on-chain."
 
 Run from the repo root so `--env-file` finds `.env`:
 
@@ -43,3 +43,13 @@ node --env-file=.env hedera/create-discarded-key-retirement-account.mjs # discar
 Neither was migrated: both are already permanently immobile, just via mechanisms the product no longer uses for new retirements.
 
 Each consortium-season is meant to get its own retirement account, deterministically derived from that season's token ID — see CLAUDE.md for what's still manual about provisioning one.
+
+**Transformation (kernel product).** A second token and its own retirement account, for the derived product a harvest lot becomes:
+
+```
+node --env-file=.env hedera/create-kernel-token.mjs               # second FINITE-supply token, maxSupply = harvest cap at the declared yield ratio
+node --env-file=.env hedera/create-deterministic-processor-account.mjs  # in-transit custody; same key-derivation scheme, needs to sign an outbound transfer
+node --env-file=.env hedera/create-kernel-retirement-account.mjs  # same formula as the harvest retirement account, keyed on the kernel token's own ID
+```
+
+Kernel token `0.0.10434455`, processor account `0.0.10434464`, kernel retirement account `0.0.10434470` (all in `.env`). The actual mint/transfer/transform/retire sequence for a real lot is run from `scripts/relayer.mjs`, not from these three setup scripts directly — see `scripts/README.md`.
