@@ -11,46 +11,71 @@ import { LoadingBlock, ErrorBlock, EmptyBlock } from "./StateViews";
 // against a handful of demonstration grams) four same-scale bars would
 // render three of them as invisible slivers. A stacked share of the cap
 // stays legible and honest at any ratio, including this one.
+// Enough decimal places to stay non-zero for a demo-scale figure against a
+// real harvest cap (1kg against 3,400,000kg is 0.00003%, which formatPercent's
+// 1-decimal rounding shows as a flat, misleading "0.0%"). Falls back to
+// "<0.000001%" only for a genuine true zero's neighborhood.
+function formatTinyPercent(part: number, whole: number): string {
+  if (whole <= 0) return "0%";
+  const pct = (part / whole) * 100;
+  if (pct === 0) return "0%";
+  if (pct < 0.000001) return "<0.000001%";
+  return `${pct.toFixed(6).replace(/0+$/, "").replace(/\.$/, "")}%`;
+}
+
 function UtilizationBar({ season }: { season: Season }) {
   const capKg = gramsToKg(season.capGrams);
   const retiredKg = gramsToKg(season.retiredGrams);
   const inCirculationKg = gramsToKg(season.inCirculationGrams);
   const headroomKg = Math.max(capKg - retiredKg - inCirculationKg, 0);
+  const usedKg = retiredKg + inCirculationKg;
 
   const data = [{ name: "cap", retired: retiredKg, inCirculation: inCirculationKg, headroom: headroomKg }];
 
   return (
-    <div className="h-20 w-full">
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} layout="vertical" margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
-          <XAxis
-            type="number"
-            domain={[0, capKg]}
-            tick={{ fill: "var(--text-muted)", fontSize: 12 }}
-            axisLine={{ stroke: "var(--border)" }}
-            tickLine={false}
-            tickFormatter={(v: number) => `${v.toLocaleString()} kg`}
-          />
-          <YAxis type="category" dataKey="name" hide />
-          <Tooltip
-            formatter={(v, name) => [`${Number(v).toLocaleString()} kg`, name]}
-            contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8 }}
-          />
-          <Bar dataKey="retired" stackId="a" fill="var(--warn)" name="Retired" barSize={28} />
-          <Bar dataKey="inCirculation" stackId="a" fill="var(--accent)" name="In circulation" barSize={28} />
-          <Bar dataKey="headroom" stackId="a" fill="var(--border)" name="Unminted headroom" radius={[0, 6, 6, 0]} barSize={28} />
-        </BarChart>
-      </ResponsiveContainer>
-      <div className="mt-1 flex gap-4 text-sm text-[var(--text-muted)]">
-        <span className="flex items-center gap-1.5">
-          <span className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--warn)" }} /> Retired
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--accent)" }} /> In circulation
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--border)" }} /> Unminted headroom
-        </span>
+    <div className="w-full">
+      {/* At real harvest scale a demo-sized mint renders as a sub-pixel
+          sliver next to the cap -- an empty-looking bar isn't a bug, but
+          it reads as one without this line spelling out the exact figures
+          the bar itself can't show at this width. */}
+      <p className="mb-1 text-sm text-[var(--text-muted)]">
+        Retired {formatKg(season.retiredGrams, { decimals: 3 })} + in circulation{" "}
+        {formatKg(season.inCirculationGrams, { decimals: 3 })} = {formatTinyPercent(usedKg, capKg)} of the{" "}
+        {capKg.toLocaleString()} kg cap
+        {usedKg > 0 && usedKg / capKg < 0.001 ? " — too small a fraction to render as a visible bar segment below." : "."}
+      </p>
+      <div className="h-20 w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} layout="vertical" margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+            <XAxis
+              type="number"
+              domain={[0, capKg]}
+              tick={{ fill: "var(--text-muted)", fontSize: 12 }}
+              axisLine={{ stroke: "var(--border)" }}
+              tickLine={false}
+              tickFormatter={(v: number) => `${v.toLocaleString()} kg`}
+            />
+            <YAxis type="category" dataKey="name" hide />
+            <Tooltip
+              formatter={(v, name) => [`${Number(v).toLocaleString()} kg`, name]}
+              contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8 }}
+            />
+            <Bar dataKey="retired" stackId="a" fill="var(--warn)" name="Retired" barSize={28} />
+            <Bar dataKey="inCirculation" stackId="a" fill="var(--accent)" name="In circulation" barSize={28} />
+            <Bar dataKey="headroom" stackId="a" fill="var(--border)" name="Unminted headroom" radius={[0, 6, 6, 0]} barSize={28} />
+          </BarChart>
+        </ResponsiveContainer>
+        <div className="mt-1 flex gap-4 text-sm text-[var(--text-muted)]">
+          <span className="flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--warn)" }} /> Retired
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--accent)" }} /> In circulation
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--border)" }} /> Unminted headroom
+          </span>
+        </div>
       </div>
     </div>
   );

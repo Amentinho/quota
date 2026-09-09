@@ -2,11 +2,19 @@ import { useState } from "react";
 import { SolvencyView } from "./components/SolvencyView";
 import { ChainView } from "./components/ChainView";
 import { SeasonView } from "./components/SeasonView";
+import { DemoView } from "./components/DemoView";
 
+// DemoView calls a localhost-only server holding real signing keys --
+// never useful, and never shown, outside a local dev server. DEV is
+// statically replaced by Vite at build time (true only under `vite dev`,
+// false for `vite build`), so this tab is absent from what a judge's
+// browser ever receives from the production build, not just hidden by
+// a runtime check.
 const TABS = [
   { id: "solvency", label: "Solvency" },
   { id: "chain", label: "Chain" },
   { id: "season", label: "Season" },
+  ...(import.meta.env.DEV ? [{ id: "demo", label: "Demo" }] as const : []),
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -47,6 +55,7 @@ function App() {
         {tab === "solvency" && <SolvencyView />}
         {tab === "chain" && <ChainView />}
         {tab === "season" && <SeasonView />}
+        {import.meta.env.DEV && tab === "demo" && <DemoView />}
       </main>
     </div>
   );

@@ -1,0 +1,15 @@
+{
+  "name": "quota-demo-server",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Local-only demo server. Holds the Sepolia relayer key and Hedera operator key in memory to sign real transactions. Binds to 127.0.0.1 only. Never deployed -- see README.md in this directory.",
+  "scripts": {
+    "start": "node --env-file=../../.env index.mjs"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "ethers": "^6.17.0",
+    "@hashgraph/sdk": "^2.81.0"
+  }
+}

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { ethers } from "ethers";
-import { Client, PrivateKey, AccountId, TokenMintTransaction, TransferTransaction } from "@hashgraph/sdk";
+import { Client, PrivateKey, AccountId, Hbar, TokenMintTransaction, TransferTransaction } from "@hashgraph/sdk";
 
 const hederaOperatorId = AccountId.fromString(process.env.HEDERA_OPERATOR_ID);
 const hederaOperatorKey = PrivateKey.fromStringDer(process.env.HEDERA_OPERATOR_KEY);
@@ -10,7 +10,7 @@ const kernelTokenId = process.env.HEDERA_KERNEL_TOKEN_ID;
 const retirementAccountId = process.env.HEDERA_RETIREMENT_ACCOUNT_ID;
 const kernelRetirementAccountId = process.env.HEDERA_KERNEL_RETIREMENT_ACCOUNT_ID;
 const processorAccountId = process.env.HEDERA_PROCESSOR_ACCOUNT_ID;
-const hederaClient = Client.forTestnet().setOperator(hederaOperatorId, hederaOperatorKey);
+export const hederaClient = Client.forTestnet().setOperator(hederaOperatorId, hederaOperatorKey);
 
 const provider = new ethers.JsonRpcProvider(process.env.SEPOLIA_RPC_URL);
 const wallet = new ethers.Wallet(process.env.SEPOLIA_DEPLOYER_KEY, provider);
@@ -27,15 +27,15 @@ const anchor = new ethers.Contract(process.env.QUOTA_ANCHOR_ADDRESS, artifact.ab
 const registryAbi = JSON.parse(
   readFileSync(new URL("../ens/abi/PermissionedRegistry.abi.json", import.meta.url)),
 );
-const bronteRegistry = new ethers.Contract(process.env.ENS_BRONTE_REGISTRY_ADDRESS, registryAbi, provider);
+export const bronteRegistry = new ethers.Contract(process.env.ENS_BRONTE_REGISTRY_ADDRESS, registryAbi, provider);
 
 // Known today because there's exactly one consortium. Becomes a real lookup
 // once Layer 3 has more than one.
-const CONSORTIUM_ID = ethers.id("bronte");
-const SEASON_ID = ethers.id("bronte-2026");
-const SEASON_LABEL = "2026";
-const KERNEL_SEASON_ID = ethers.id("bronte-2026-kernel");
-const KERNEL_SEASON_LABEL = "kernel-2026";
+export const CONSORTIUM_ID = ethers.id("bronte");
+export const SEASON_ID = ethers.id("bronte-2026");
+export const SEASON_LABEL = "2026";
+export const KERNEL_SEASON_ID = ethers.id("bronte-2026-kernel");
+export const KERNEL_SEASON_LABEL = "kernel-2026";
 const MINTER_ROLE = 1n << 40n; // must match ens/roles.mjs and the contract's MINTER_ROLE
 
 // Same derivation scheme as the retirement account (see CLAUDE.md, "Making
@@ -223,7 +223,7 @@ async function doOpenSeason(seasonId, label, hederaTokenIdForSeason) {
 // resolve or the role is absent" -- an off-chain courtesy check so a bad
 // call never even reaches the contract, not a substitute for the contract's
 // own on-chain enforcement (which re-checks both independently).
-async function checkSeasonAuthorization(label, certifier) {
+export async function checkSeasonAuthorization(label, certifier) {
   const resolverAddr = await bronteRegistry.getResolver(label);
   if (resolverAddr === ethers.ZeroAddress) {
     throw new Error(
@@ -242,7 +242,7 @@ async function checkSeasonAuthorization(label, certifier) {
   console.log(`  "${label}" resolves (resolver ${resolverAddr}) and ${certifier} holds MINTER. Proceeding.`);
 }
 
-async function doMint(grams, lotRef, certifier) {
+export async function doMint(grams, lotRef, certifier) {
   console.log(`Checking season authorization for certifier ${certifier}...`);
   await checkSeasonAuthorization(SEASON_LABEL, certifier);
 
@@ -264,10 +264,8 @@ async function doMint(grams, lotRef, certifier) {
   // replaces "@" and the timestamp's internal "." with "-" -- verified
   // against a real transaction page, not guessed.
   const [account, timestamp] = hederaTxId.split("@");
-  console.log(
-    "HashScan:",
-    `https://hashscan.io/testnet/transaction/${account}-${timestamp.replace(".", "-")}`,
-  );
+  const hashscanUrl = `https://hashscan.io/testnet/transaction/${account}-${timestamp.replace(".", "-")}`;
+  console.log("HashScan:", hashscanUrl);
 
   console.log("Anchoring on Sepolia...");
   try {
@@ -275,6 +273,13 @@ async function doMint(grams, lotRef, certifier) {
     const receipt = await tx.wait();
     console.log("Anchored. Sepolia tx:", receipt.hash);
     console.log("Etherscan:", `https://sepolia.etherscan.io/tx/${receipt.hash}`);
+    return {
+      hederaStatus: mintReceipt.status.toString(),
+      hederaTxId,
+      hashscanUrl,
+      sepoliaTxHash: receipt.hash,
+      etherscanUrl: `https://sepolia.etherscan.io/tx/${receipt.hash}`,
+    };
   } catch (err) {
     console.error("=".repeat(70));
     console.error("ANCHOR FAILED after a SUCCESSFUL Hedera mint.");
@@ -290,7 +295,7 @@ async function doMint(grams, lotRef, certifier) {
 // Custody transfer, harvest token: operator (treasury) -> the deterministic
 // processor account, ahead of transformation. Real Hedera transfer, then
 // anchored -- same do-the-Hedera-leg-first pattern as everything else here.
-async function doTransfer(grams) {
+export async function doTransfer(grams) {
   console.log(`Transferring ${grams} grams from operator to processor (${processorAccountId}) on Hedera...`);
   const transferSubmit = await new TransferTransaction()
     .addTokenTransfer(hederaTokenId, hederaOperatorId, -grams)
@@ -300,13 +305,84 @@ async function doTransfer(grams) {
   if (transferReceipt.status.toString() !== "SUCCESS") {
     throw new Error(`Hedera transfer failed: ${transferReceipt.status.toString()}`);
   }
-  console.log("Hedera transfer SUCCESS. Hedera tx ID:", transferSubmit.transactionId.toString());
+  const hederaTxId = transferSubmit.transactionId.toString();
+  console.log("Hedera transfer SUCCESS. Hedera tx ID:", hederaTxId);
 
   console.log("Anchoring transfer on Sepolia...");
   const tx = await anchor.recordTransfer(SEASON_ID, wallet.address, wallet.address, grams);
   const receipt = await tx.wait();
   console.log("UnitsTransferred anchored. Sepolia tx:", receipt.hash);
   console.log("Etherscan:", `https://sepolia.etherscan.io/tx/${receipt.hash}`);
+  return { hederaTxId, sepoliaTxHash: receipt.hash };
+}
+
+// Live balance check, no local bookkeeping -- the source of truth for
+// "does the processor have enough to transform" is the mirror node, not
+// a counter this process maintains, since a fresh server restart (or a
+// second caller) would desync a local counter immediately.
+async function processorHarvestBalance() {
+  const res = await fetch(
+    `https://testnet.mirrornode.hedera.com/api/v1/tokens/${hederaTokenId}/balances?account.id=${processorAccountId}`,
+  );
+  const data = await res.json();
+  return BigInt(data.balances[0]?.balance ?? 0);
+}
+
+// The processor signs an outbound transfer of its own during a transform
+// (input -> retirement), and the harvest token carries a 1 HBAR custom
+// fee -- the processor pays that fee itself as sender, not the operator,
+// even though the operator is the fee collector. The account was created
+// with only 1 HBAR and has no ongoing income, so it silently drains to
+// zero after enough real runs and the next transform fails with
+// INSUFFICIENT_SENDER_ACCOUNT_BALANCE_FOR_CUSTOM_FEE -- found by actually
+// running the demo panel end to end, not anticipated in the design. Tops
+// up from the operator (1048 HBAR on testnet, effectively unlimited for
+// this) whenever the processor's HBAR balance drops below a safety
+// margin, so repeated demo takes don't require a manual top-up step.
+const PROCESSOR_HBAR_MINIMUM = 3;
+const PROCESSOR_HBAR_TOPUP = 5;
+
+async function ensureProcessorHbar() {
+  const res = await fetch(`https://testnet.mirrornode.hedera.com/api/v1/accounts/${processorAccountId}`);
+  const data = await res.json();
+  const balanceHbar = (data.balance?.balance ?? 0) / 1e8;
+  if (balanceHbar >= PROCESSOR_HBAR_MINIMUM) return { topUpNeeded: false, balanceHbar };
+
+  console.log(`Processor holds ${balanceHbar} HBAR, below the ${PROCESSOR_HBAR_MINIMUM} HBAR minimum -- topping up ${PROCESSOR_HBAR_TOPUP} HBAR from the operator...`);
+  const topUpSubmit = await new TransferTransaction()
+    .addHbarTransfer(hederaOperatorId, new Hbar(-PROCESSOR_HBAR_TOPUP))
+    .addHbarTransfer(AccountId.fromString(processorAccountId), new Hbar(PROCESSOR_HBAR_TOPUP))
+    .execute(hederaClient);
+  const topUpReceipt = await topUpSubmit.getReceipt(hederaClient);
+  if (topUpReceipt.status.toString() !== "SUCCESS") {
+    throw new Error(`Processor HBAR top-up failed: ${topUpReceipt.status.toString()}`);
+  }
+  return { topUpNeeded: true, toppedUpHbar: PROCESSOR_HBAR_TOPUP };
+}
+
+// Ensures the processor holds at least `grams` of the harvest token before
+// a transform's real Hedera leg runs, topping it up from the operator if
+// not -- so the demo panel's "transform" button stays repeatable across
+// takes without a separate manual funding step each time.
+export async function ensureProcessorFunded(grams) {
+  const balance = await processorHarvestBalance();
+  if (balance >= BigInt(grams)) return { topUpNeeded: false, balance: balance.toString() };
+  const shortfall = Number(BigInt(grams) - balance);
+  console.log(`Processor holds ${balance}g, needs ${grams}g -- minting ${shortfall}g fresh and transferring it in...`);
+  // Minted fresh (anchored) rather than moved from the operator's
+  // pre-existing balance: a transfer alone would grow retiredGrams at
+  // the next transform without growing mintedGrams to match, since
+  // nothing anchors a new UnitsMinted for tokens that were already
+  // sitting in the operator's balance before this run -- inCirculationGrams
+  // (mintedGrams - retiredGrams) went visibly negative on the dashboard
+  // from exactly this, caught by actually clicking the demo panel, not
+  // anticipated in the design. Every top-up is now its own real,
+  // anchored mint, so repeated demo takes stay balanced instead of
+  // compounding a growing shortfall.
+  const certifier = process.env.ENS_CERTIFIER_ADDRESS;
+  await doMint(shortfall, `demo-topup-${Date.now()}`, certifier);
+  await doTransfer(shortfall);
+  return { topUpNeeded: true, toppedUp: shortfall.toString(), mintedFresh: true };
 }
 
 // Retirement is a real Hedera transfer to the dedicated retirement account
@@ -371,7 +447,7 @@ async function doRetireKernel(grams, lotRef) {
 // that succeeds do the real Hedera legs run: input grams retired (processor
 // -> retirement, signed with the deterministic processor key, NOT burned),
 // output grams minted fresh on the kernel token, and both anchored.
-async function doTransform(inputGrams, outputGrams, lotRef, productType) {
+export async function doTransform(inputGrams, outputGrams, lotRef, productType) {
   console.log(
     `Recording transform: ${inputGrams}g (lot ${lotRef}) -> claimed ${outputGrams}g ${productType}. Checking the yield ceiling on-chain first...`,
   );
@@ -387,7 +463,15 @@ async function doTransform(inputGrams, outputGrams, lotRef, productType) {
   console.log("Transformed anchored -- ceiling held. Sepolia tx:", transformReceipt.hash);
   console.log("Etherscan:", `https://sepolia.etherscan.io/tx/${transformReceipt.hash}`);
 
-  console.log(`Ceiling held. Retiring ${inputGrams}g of the input from the processor account (not burning)...`);
+  // Ceiling held on Sepolia -- only now is it safe to touch real Hedera
+  // balances. Top up the processor's token balance and its HBAR (it pays
+  // the harvest token's custom fee itself when it signs the outbound
+  // transfer below) first, if this call needs more of either than it
+  // currently holds.
+  await ensureProcessorFunded(inputGrams);
+  await ensureProcessorHbar();
+
+  console.log(`Retiring ${inputGrams}g of the input from the processor account (not burning)...`);
   const inputRetireSigned = await new TransferTransaction()
     .addTokenTransfer(hederaTokenId, AccountId.fromString(processorAccountId), -inputGrams)
     .addTokenTransfer(hederaTokenId, retirementAccountId, inputGrams)
@@ -424,6 +508,14 @@ async function doTransform(inputGrams, outputGrams, lotRef, productType) {
   const mintTx = await anchor.recordMint(KERNEL_SEASON_ID, wallet.address, outputGrams, outputHederaTxId, certifier, lotRef);
   const mintReceipt = await mintTx.wait();
   console.log("UnitsMinted (output) anchored. Sepolia tx:", mintReceipt.hash);
+
+  return {
+    transformTxHash: transformReceipt.hash,
+    inputHederaTxId,
+    outputHederaTxId,
+    retireTxHash: retireReceipt.hash,
+    mintTxHash: mintReceipt.hash,
+  };
 }
 
 async function doRegisterParticipant(addr, role) {
@@ -434,6 +526,15 @@ async function doRegisterParticipant(addr, role) {
   console.log("Etherscan:", `https://sepolia.etherscan.io/tx/${receipt.hash}`);
 }
 
+// Guarded so `app/server` (and anything else) can import this module's
+// functions -- doMint, doTransform, doTransfer, checkSeasonAuthorization,
+// the season/consortium constants -- without triggering the CLI dispatch
+// or closing the shared Hedera client out from under a long-running
+// process. Only runs when this file is the one node was actually invoked
+// on, i.e. `node relayer.mjs ...`, not `import "./relayer.mjs"`.
+const isMain = import.meta.url === `file://${process.argv[1]}`;
+
+if (isMain) {
 const [, , command, ...args] = process.argv;
 
 try {
@@ -497,4 +598,5 @@ try {
   }
 } finally {
   hederaClient.close();
+}
 }
