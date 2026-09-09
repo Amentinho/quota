@@ -7,9 +7,11 @@ This subgraph does not talk to Hedera. It can't: subgraph mappings are determini
 ```
 npx graph codegen
 npx graph build
+npx graph auth <deploy key>
+npx graph deploy quota
 ```
 
-Both succeed against the committed schema and mappings. Deployment needs a Subgraph Studio deploy key (`graph auth <key>`, then `graph deploy quota`) — that's created by connecting a wallet in the browser, so it's not something this session can do on its own.
+All four succeed. Live endpoint: **`https://api.studio.thegraph.com/query/1758548/quota/v0.0.1`**. A judge needs only that URL — no API key, no wallet, no local setup — to run the three example queries in the top-level README against real indexed data. Check `{ _meta { block { number } hasIndexingErrors } }` first if the numbers look stale; it should be within a few blocks of Sepolia's current head, with `hasIndexingErrors: false`.
 
 ## Schema
 

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { ethers } from "ethers";
-import { Client, PrivateKey, AccountId, TokenMintTransaction } from "@hashgraph/sdk";
+import { Client, PrivateKey, AccountId, TokenMintTransaction, TransferTransaction } from "@hashgraph/sdk";
 
 const hederaOperatorId = AccountId.fromString(process.env.HEDERA_OPERATOR_ID);
 const hederaOperatorKey = PrivateKey.fromStringDer(process.env.HEDERA_OPERATOR_KEY);
@@ -251,6 +251,43 @@ async function doMint(grams, certifier) {
   }
 }
 
+// Retirement is a real Hedera transfer to the dedicated retirement account
+// (see CLAUDE.md, "Retire don't burn") followed by anchoring that same
+// transfer's real transaction ID -- same pattern as doMint: do the Hedera
+// leg first, anchor what actually happened, never anchor a claim the ledger
+// doesn't back. The retirement account needs no private key here; only the
+// sender (operator) signs a transfer.
+async function doRetire(grams, lotRef) {
+  console.log(`Transferring ${grams} grams to retirement account ${retirementAccountId} on Hedera...`);
+  const transferSubmit = await new TransferTransaction()
+    .addTokenTransfer(hederaTokenId, hederaOperatorId, -grams)
+    .addTokenTransfer(hederaTokenId, retirementAccountId, grams)
+    .execute(hederaClient);
+  const transferReceipt = await transferSubmit.getReceipt(hederaClient);
+
+  if (transferReceipt.status.toString() !== "SUCCESS") {
+    throw new Error(`Hedera retirement transfer failed: ${transferReceipt.status.toString()}`);
+  }
+
+  const hederaTxId = transferSubmit.transactionId.toString();
+  console.log("Hedera transfer SUCCESS.");
+  console.log("Hedera tx ID:", hederaTxId);
+
+  console.log("Anchoring retirement on Sepolia...");
+  const tx = await anchor.recordRetirement(SEASON_ID, grams, lotRef, hederaTxId);
+  const receipt = await tx.wait();
+  console.log("UnitsRetired anchored. Sepolia tx:", receipt.hash);
+  console.log("Etherscan:", `https://sepolia.etherscan.io/tx/${receipt.hash}`);
+}
+
+async function doRegisterParticipant(addr, role) {
+  console.log(`Registering participant ${addr} (role: ${role})...`);
+  const tx = await anchor.registerParticipant(CONSORTIUM_ID, addr, role);
+  const receipt = await tx.wait();
+  console.log("ParticipantRegistered anchored. Sepolia tx:", receipt.hash);
+  console.log("Etherscan:", `https://sepolia.etherscan.io/tx/${receipt.hash}`);
+}
+
 const [, , command, ...args] = process.argv;
 
 try {
@@ -267,8 +304,24 @@ try {
     await doMint(grams, certifier);
   } else if (command === "reconcile-mints") {
     await reconcileMints();
+  } else if (command === "retire") {
+    const grams = Number(args[0]);
+    const lotRef = args[1];
+    if (!Number.isInteger(grams) || grams <= 0 || !lotRef) {
+      throw new Error("Usage: node scripts/relayer.mjs retire <grams> <lotRef>");
+    }
+    await doRetire(grams, lotRef);
+  } else if (command === "register-participant") {
+    const addr = args[0];
+    const role = args[1];
+    if (!addr || !role) {
+      throw new Error("Usage: node scripts/relayer.mjs register-participant <address> <role>");
+    }
+    await doRegisterParticipant(addr, role);
   } else {
-    console.log("Usage: node scripts/relayer.mjs <open-season|mint|reconcile-mints> [args]");
+    console.log(
+      "Usage: node scripts/relayer.mjs <open-season|mint|reconcile-mints|retire|register-participant> [args]",
+    );
     process.exitCode = 1;
   }
 } finally {

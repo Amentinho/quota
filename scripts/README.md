@@ -8,11 +8,15 @@ On every invocation, before doing anything else, it also checks the retirement-a
 node --env-file=../.env relayer.mjs open-season
 node --env-file=../.env relayer.mjs mint <grams> [certifierAddress]
 node --env-file=../.env relayer.mjs reconcile-mints
+node --env-file=../.env relayer.mjs retire <grams> <lotRef>
+node --env-file=../.env relayer.mjs register-participant <address> <role>
 ```
 
 `reconcile-mints` is the actual mint detector's bridge into the subgraph (subgraph mappings can't call the Hedera mirror node directly — see CLAUDE.md, "Bridging Hedera mirror-node data into the subgraph"): it fetches full Hedera mint history for the token, fetches full `UnitsMinted` anchor history from every `QuotaAnchor` address ever deployed, and anchors `UnauthorizedMintDetected` for anything unmatched. Run it any time; it's idempotent in the sense that anything already matched stays matched, but it does write a new anchor event for every unmatched mint on every run, so don't run it repeatedly against a known, already-anchored discrepancy expecting it to go quiet on its own — anchoring the finding is the point.
 
-`transfer`, `retire`, `transform`, and `registerParticipant` are not yet wired up — the contract functions exist, the relayer doesn't call them yet.
+`retire` does a real Hedera transfer of `<grams>` from the operator to the retirement account first, then anchors `recordRetirement` with that transfer's own Hedera tx ID — same do-the-Hedera-leg-first-then-anchor-what-actually-happened pattern as `mint`, never anchors a claim the ledger doesn't back. `register-participant` anchors `ParticipantRegistered` directly — no Hedera leg, since registration is a Sepolia-only accountability record.
+
+`transfer` and `transform` are not yet wired up — the contract functions exist, the relayer doesn't call them yet.
 
 `mint-bypassing-relayer.mjs` — mints directly via the Hedera SDK, skipping the relayer and leaving no Sepolia anchor. A permanent testing tool (not a throwaway script), used to prove the reconciler actually catches a genuinely unauthorized mint rather than just asserting it would.
 

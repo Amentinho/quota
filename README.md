@@ -155,7 +155,9 @@ One shared GraphQL schema, deployed to Subgraph Studio (project slug `quota`) on
 
 ### Three queries against the live endpoint
 
-Deployed subgraph endpoint: *(added once deployed — Studio deploy key needed, see Status)*.
+**Live endpoint:** `https://api.studio.thegraph.com/query/1758548/quota/v0.0.1`
+
+That's all a judge needs — no API key, no wallet, nothing to install. POST any of the three queries below as JSON (`{"query": "..."}`) to that URL, or paste them into Subgraph Studio's own in-browser playground for the `quota` subgraph. If you want to sanity-check freshness first: `{ _meta { block { number } hasIndexingErrors } }` should show `hasIndexingErrors: false` and a block number close to Sepolia's current head.
 
 **1. Season lifecycle — the composability claim itself.** Swap `consortiumId` for any consortium's id and the shape of the response doesn't change:
 ```graphql
@@ -175,8 +177,31 @@ query SeasonLifecycle {
   }
 }
 ```
+Real returned JSON:
+```json
+{
+  "data": {
+    "consortium": {
+      "id": "0x15b5c6738cfb5e2b01ba96ceeaa44f6d9c1f657b4f24f5df918008069f036c4c",
+      "seasons": [
+        {
+          "id": "0xa4baff5b7d3e9ce47e3883640443c4f96c3c9d5ab41ef2d6fb111aa877680d46",
+          "year": "2026",
+          "hederaTokenId": "0.0.10411251",
+          "capGrams": "3400000000",
+          "mintedGrams": "1",
+          "retiredGrams": "1",
+          "inCirculationGrams": "0",
+          "utilisationBp": "0"
+        }
+      ]
+    }
+  }
+}
+```
+`mintedGrams` counts only the legitimately anchored mint — the bypass mint below is deliberately excluded from it and surfaced as a fraud finding instead, not folded into the legitimate total.
 
-**2. Fraud findings — both detector paths, for one consortium.**
+**2. Fraud findings — both detector paths, for one consortium. This is the one a judge should check first.**
 ```graphql
 query FraudFindings {
   consortium(id: "0x15b5c6738cfb5e2b01ba96ceeaa44f6d9c1f657b4f24f5df918008069f036c4c") {
@@ -193,6 +218,29 @@ query FraudFindings {
         hederaTxId
         blockTimestamp
       }
+    }
+  }
+}
+```
+Real returned JSON — the bypass mint from `scripts/mint-bypassing-relayer.mjs`, caught by the reconciler with no help from us pointing at it:
+```json
+{
+  "data": {
+    "consortium": {
+      "seasons": [
+        {
+          "id": "0xa4baff5b7d3e9ce47e3883640443c4f96c3c9d5ab41ef2d6fb111aa877680d46",
+          "unauthorizedMints": [
+            {
+              "grams": "1",
+              "hederaTxId": "0.0.10323351-1788884980-415990532",
+              "blockTimestamp": "1788885228",
+              "transactionHash": "0xb6e3ef6745caf2dd4058e4cf844d2a300131d25e511d1375d602d84e6132ba93"
+            }
+          ],
+          "unauthorizedRetirementOutflows": []
+        }
+      ]
     }
   }
 }
@@ -216,6 +264,30 @@ query RetirementsBySeason {
   }
 }
 ```
+Real returned JSON:
+```json
+{
+  "data": {
+    "season": {
+      "id": "0xa4baff5b7d3e9ce47e3883640443c4f96c3c9d5ab41ef2d6fb111aa877680d46",
+      "lots": [
+        {
+          "id": "0xa4baff5b7d3e9ce47e3883640443c4f96c3c9d5ab41ef2d6fb111aa877680d46-lot-2026-001",
+          "lotRef": "lot-2026-001",
+          "totalRetiredGrams": "1",
+          "retirements": [
+            {
+              "grams": "1",
+              "hederaTxId": "0.0.10323351@1788940797.654282607"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
+```
+This lot's one retirement (and the `grower` participant behind it) came from actually calling the relayer's `retire`/`register-participant` commands — real Hedera transfer, real Sepolia anchor, not seed data written to make the query non-empty.
 
 ## Architecture
 
@@ -246,7 +318,7 @@ The same framing applies to retirement-account outflows (see "Making retirement 
 
 All three layers are implemented and verified on testnet. Layer 1: the Hedera asset, its core invariant, and the retirement mechanism. Layer 2: `QuotaAnchor.sol` deployed and verified on Sepolia, reading the cap live from ENS. Layer 3: `quota.eth` → `bronte.quota.eth` → `2026.bronte.quota.eth` registered and load-bearing, with the kill test proven three ways above.
 
-The subgraph's schema and mappings are written, and build clean (`graph codegen` / `graph build`). The mint-reconciliation detector is built, run, and verified against a real bypass mint — see above. What's outstanding is the actual `graph deploy` to Subgraph Studio: that requires a deploy key created by connecting a wallet in Studio's browser UI, which is not something this session can do on its own. See [`CLAUDE.md`](CLAUDE.md) for the current build breakdown.
+The subgraph is deployed for real to Subgraph Studio and synced to chain head — live at `https://api.studio.thegraph.com/query/1758548/quota/v0.0.1`. The mint-reconciliation detector is built, run, and verified against a real bypass mint, visible in query 2 above. Retirement traceability (query 3) needed real on-chain data too, not seed data, so the relayer gained `retire` and `register-participant` commands and both were actually run before that query was considered done. See [`CLAUDE.md`](CLAUDE.md) for the current build breakdown.
 
 ## License
 
