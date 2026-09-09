@@ -1,0 +1,20 @@
+channel,url,product_title,raw_weight_string,reason
+www.pistasta.it,https://www.pistasta.it/it/prodotti/pistacchio-di-bronte/pistacchio/pistacchio-di-bronte-dop-80,Configurazione dei cookies,100 gr,0.1,page_furniture
+shop.pistacchioevergreen.it,https://shop.pistacchioevergreen.it/prodotti/frutta-secca/pistacchio-verde-di-bronte-d-o-p-sgusciato/,Pistacchio Verde di Bronte D.O.P. Sgusciato,,,duplicate_scrape
+neronatura.it,https://neronatura.it/shop/semi-e-bacche/semi-di-lino/,SEMI DI LINO,100 g,0.1,wrong_product
+www.terramadre.it,https://www.terramadre.it/it/pistacchio/,PISTACCHIO,850 g,0.85,generic_nonproduct_title
+www.enotecailbarocco.it,https://www.facebook.com/sharer.php?u=https://www.enotecailbarocco.it/prodotto/pistacchio-sgusciato-verde-di-bronte-dop-100g/,Facebook,100g,0.1,page_furniture
+www.enotecailbarocco.it,https://www.enotecailbarocco.it/prodotto/pesto-con-pistacchio-verde-di-bronte-dop/,PISTACCHIO,,,generic_nonproduct_title
+www.enotecailbarocco.it,https://www.enotecailbarocco.it/prodotto/pesto-con-pistacchio-verde-di-bronte-dop-2/,PISTACCHIO,,,generic_nonproduct_title
+www.enotecailbarocco.it,https://www.enotecailbarocco.it/prodotto/crema-con-pistacchio-verde-di-bronte-dop/,"DOLCI E BISCOTTI, PISTACCHIO",,,generic_nonproduct_title
+www.enotecailbarocco.it,https://www.enotecailbarocco.it/prodotto/granella-di-pistacchio-verde-di-bronte-dop-100g/,PISTACCHIO,100g,0.1,generic_nonproduct_title
+www.enotecailbarocco.it,https://www.enotecailbarocco.it/prodotto/crema-di-pistacchio-verde-di-bronte-dop-190g/,PISTACCHIO,190g,0.19,generic_nonproduct_title
+www.enotecailbarocco.it,https://www.enotecailbarocco.it/prodotto/pesto-con-pistacchio-verde-di-bronte-dop/,PISTACCHIO,,,generic_nonproduct_title
+www.enotecailbarocco.it,https://www.enotecailbarocco.it/prodotto/pesto-con-pistacchio-verde-di-bronte-dop-2/,PISTACCHIO,,,generic_nonproduct_title
+www.enotecailbarocco.it,https://www.enotecailbarocco.it/prodotto/crema-con-pistacchio-verde-di-bronte-dop/,"DOLCI E BISCOTTI, PISTACCHIO",,,generic_nonproduct_title
+www.enotecailbarocco.it,https://www.enotecailbarocco.it/prodotto/granella-di-pistacchio-verde-di-bronte-dop-100g/,PISTACCHIO,100g,0.1,generic_nonproduct_title
+www.enotecailbarocco.it,https://www.enotecailbarocco.it/prodotto/crema-di-pistacchio-verde-di-bronte-dop-190g/,PISTACCHIO,190g,0.19,generic_nonproduct_title
+www.barrili.it,https://www.barrili.it/products/pistacchio-sgusciato-origine-sicilia-1kg#ProductInfo-template--16431569535241__main,Passa alle informazioni sul prodotto,100 gr,0.1,page_furniture
+www.italybite.it,https://www.italybite.it/it/brand/don-tanu,DON TANU,200gr,0.2,generic_nonproduct_title
+www.dattilofruttasecca.it,https://www.dattilofruttasecca.it/product/nocciole-premium-in-guscio-tostate/,Nocciole Premium in guscio tostate,40 g,0.04,wrong_product
+pariani.org,https://pariani.org/inventario/ingredients/frutta-candita-in-filetti/zenzero-candito-in-filetti/,Filetti di Zenzero candito,1 kg,1.0,wrong_product
