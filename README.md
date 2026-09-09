@@ -14,6 +14,27 @@ The number nobody can compute is how much product claims Bronte origin at any gi
 - **Demo data, clearly labeled as such and nowhere presented as a market figure**: the harvest cap (3,400,000,000 grams — a round illustrative number in the ballpark of the real range cited above, not itself drawn from any single one of those sources) and the one real lot run through the full mint → transfer → transform → retire flow (1,000 grams — a demonstration quantity, not a claim about real harvest volume). The *mechanism* these numbers exercise — conservation enforced by token supply, a yield ratio enforced on-chain — is exactly what a real deployment at real harvest scale would run; only the numbers are demo-sized, not the logic.
 - **What a judge can check without trusting this README**: the contract's verified source and every anchor event on [Etherscan](https://sepolia.etherscan.io/address/0x13A0Bb73C5a629dF1a8c91F99213d6077cc1acE2#code); every indexed entity via the [live subgraph endpoint](https://api.studio.thegraph.com/query/1758548/quota/v0.0.2) (three example queries below, with real returned output, not query text); the ENS names and their live expiry/role state directly on Sepolia (the dashboard's Season view reads this live, or query the registry yourself); and the [dashboard](https://quota-bronte.vercel.app) itself, which reads only these public sources and has no backend of its own.
 
+## Verify this yourself in 90 seconds
+
+Four checks, each one click or one paste. No repo clone, no install, no keys — you're reading public state, not trusting this document.
+
+**1. Open the [dashboard](https://quota-bronte.vercel.app), Solvency tab (the default view).**
+You'll see: a cap of 3,400,000 kg for the 2026 harvest season, non-zero minted/retired figures, and a red detector-findings panel listing at least three entries — one badged **"Intentional demonstration"**, the rest badged **"Predates season re-open, real"**. Real numbers and real badges, not a blank or stuck-loading screen, means this step worked.
+
+**2. Paste this into the live subgraph endpoint** — a terminal `curl`, or any GraphQL client, no login required:
+```bash
+curl -s -X POST https://api.studio.thegraph.com/query/1758548/quota/v0.0.2 \
+  -H "Content-Type: application/json" \
+  -d '{"query":"{ consortium(id: \"0x15b5c6738cfb5e2b01ba96ceeaa44f6d9c1f657b4f24f5df918008069f036c4c\") { seasons { id unauthorizedMints { grams hederaTxId transactionHash } } } }"}'
+```
+You'll see: a JSON object with a `seasons` array; the harvest season's `unauthorizedMints` array is non-empty, each entry carrying a real `hederaTxId` and `transactionHash` you can look up independently on HashScan and Etherscan. An empty array or a GraphQL error means this step failed — it should never be empty.
+
+**3. Open the harvest token on [HashScan](https://hashscan.io/testnet/token/0.0.10411251).**
+You'll see **Fungible Token**, a **MAX SUPPLY** of `3,400,000.000` sitting next to **TOTAL SUPPLY** (a capped number, not "unlimited" — that cap is the `FINITE` supply type doing its job even though HashScan's UI doesn't print the word itself), and under "Token Keys": `ADMIN KEY: None`, `FEE SCHEDULE KEY: None`, `PAUSE KEY: None`, `WIPE KEY: None` — each annotated immutable or "cannot be [x]". If any of those four shows a real key instead of `None`, the immutability claim in this README is false; this step exists so you can check that it isn't.
+
+**4. On the [dashboard](https://quota-bronte.vercel.app), click the "Season" tab** — `2026.bronte.quota.eth` is already selected in its dropdown, no further clicks needed.
+You'll see a "Text records" panel read live from Sepolia — `Cap (g)` reading `3400000000` and `Kernel yield (bp)` reading `4500`. These aren't numbers this README asserts; they're read from the same ENS resolver `QuotaAnchor` itself reads from at mint- and transform-time, live, in your own browser.
+
 ## Core invariants
 
 ```
