@@ -336,7 +336,7 @@ A Vite + React + TypeScript + Tailwind app (`app/`) reading directly from the li
 - **Chain** — a real lot's journey: harvest mint, transfer, transformation (with the yield ratio the contract actually enforced), retirement — grams shown at every step.
 - **Season** — the ENS name, its expiry, its text records, and current `MINTER` role holders, all read live from Sepolia, not cached and not from the subgraph.
 
-Live at: *(added once deployed — see Status)*.
+**Live at: [`https://app-seven-gray-96.vercel.app`](https://app-seven-gray-96.vercel.app)** — no login, no wallet connection, nothing to configure. Reads a public Sepolia RPC and the live subgraph directly from the browser; the deployed bundle carries no API keys of any kind (checked directly against the shipped JS, not just the source).
 
 ## Architecture
 
@@ -370,7 +370,7 @@ All four layers are implemented and verified on testnet. Layer 1: two Hedera ass
 
 The subgraph is deployed for real to Subgraph Studio and synced to chain head — live at `https://api.studio.thegraph.com/query/1758548/quota/v0.0.2`. The mint-reconciliation detector is built, run, and verified against three real findings (one deliberate bypass, two accidental). One real lot has been run fully end to end — mint, transfer, transform (with a proven ceiling rejection), and retirement on both the input and output side — and is queryable via query 3 above.
 
-Layer 4, the dashboard, is built and verified locally (all three views, against the live endpoints above) but not yet deployed publicly — that needs a Vercel token this session doesn't have. See [`CLAUDE.md`](CLAUDE.md) for the current build breakdown.
+Layer 4, the dashboard, is deployed to Vercel and verified live — all three views checked directly against the production build (not just local dev), console clean, and the shipped JS bundle confirmed to carry no keys. See "The dashboard" above for the URL. See [`CLAUDE.md`](CLAUDE.md) for the current build breakdown.
 
 ## License
 
