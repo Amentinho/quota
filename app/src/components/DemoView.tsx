@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAsync } from "../lib/useAsync";
 import { readTextRecord, readSeasonEnsState } from "../lib/ens";
 import { shortAddr } from "../lib/format";
@@ -137,7 +137,18 @@ export function DemoView() {
   // 1. Approver -- holds MINTER_ROLE_ADMIN, never MINTER. Grants/revokes
   // MINTER on whatever address is typed into the editable field below;
   // cannot mint itself, proven by the "Attempt mint as Approver" button.
+  // Pre-fills with Issuer 1's address, not the Approver's own -- an
+  // earlier version left this field blank with copy suggesting "paste the
+  // Approver's own address to see a grant succeed," which is exactly what
+  // happened: granting MINTER to the Approver actually gives it MINTER,
+  // silently breaking the separation-of-powers proof below (the "Attempt
+  // mint as Approver" button then returns SUCCESS, correctly, since the
+  // Approver genuinely holds MINTER at that point -- the bug was the
+  // invitation, not the mechanism). targetAccountTouched tracks whether
+  // the operator has typed into the field themselves, so the pre-fill
+  // doesn't clobber a deliberate edit once Issuer 1's address loads.
   const [targetAccount, setTargetAccount] = useState("");
+  const [targetAccountTouched, setTargetAccountTouched] = useState(false);
   const [roleResult, setRoleResult] = useState<ActionResult>(null);
   const [rolePending, setRolePending] = useState(false);
   const [approverMintResult, setApproverMintResult] = useState<ActionResult>(null);
@@ -145,9 +156,13 @@ export function DemoView() {
 
   const minterHoldersState = useAsync(() => readSeasonEnsState("2026"), []);
 
-  // 2. Issuer -- holds MINTER, cannot grant. Mints as whichever of the two
-  // issuer addresses is selected.
-  const [issuerChoice, setIssuerChoice] = useState<"issuer1" | "issuer2">("issuer1");
+  // 2. Issuer -- reads the LIVE MINTER holder list (shared with the
+  // Approver section's list above) rather than a hardcoded pair of .env
+  // addresses, so granting a new address through this panel and then
+  // minting as it works end to end without a code change. An earlier
+  // version hardcoded the two original issuer addresses, so any address
+  // granted MINTER through the panel itself never appeared here.
+  const [issuerAddress, setIssuerAddress] = useState("");
   const [issuerGrams, setIssuerGrams] = useState(5);
   const [issuerMintResult, setIssuerMintResult] = useState<ActionResult>(null);
   const [issuerMintPending, setIssuerMintPending] = useState(false);
@@ -175,7 +190,30 @@ export function DemoView() {
   const [transformPending, setTransformPending] = useState(false);
 
   const config = configState.status === "ready" ? configState.data : null;
-  const issuerAddress = issuerChoice === "issuer1" ? config?.issuer1Address : config?.issuer2Address;
+  const minterHolders = minterHoldersState.status === "ready" ? minterHoldersState.data.minterHolders : [];
+
+  // Pre-fill the grant/revoke target with Issuer 1 once known, unless the
+  // operator has already typed something.
+  useEffect(() => {
+    if (!targetAccountTouched && config?.issuer1Address) {
+      setTargetAccount(config.issuer1Address);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config?.issuer1Address]);
+
+  // Default the issuer selector to the first live MINTER holder, and fall
+  // back to it if the currently-selected address stops holding MINTER
+  // (e.g. it was just revoked from the Approver panel).
+  useEffect(() => {
+    if (minterHolders.length === 0) return;
+    if (!minterHolders.some((a) => a.toLowerCase() === issuerAddress.toLowerCase())) {
+      setIssuerAddress(minterHolders[0]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [minterHoldersState.status]);
+
+  const targetIsApprover =
+    !!config && !!targetAccount && targetAccount.toLowerCase() === config.approverAddress.toLowerCase();
 
   return (
     <div className="flex flex-col gap-6">
@@ -197,7 +235,7 @@ export function DemoView() {
 
         <ActionCard
           title="Grant / revoke MINTER"
-          description="Targets whatever address is typed below — try an issuer address, or paste the Approver's own to see a grant succeed without that making it able to mint."
+          description="Targets whatever address is typed below — pre-filled with Issuer 1. Edit it to target any address, including a new one you want to grant MINTER to."
           result={roleResult}
           pending={rolePending}
         >
@@ -206,11 +244,20 @@ export function DemoView() {
             <input
               type="text"
               value={targetAccount}
-              onChange={(e) => setTargetAccount(e.target.value)}
+              onChange={(e) => {
+                setTargetAccountTouched(true);
+                setTargetAccount(e.target.value);
+              }}
               placeholder="0x…"
               className={`${inputClass} w-96 font-mono`}
             />
           </label>
+          {targetIsApprover && (
+            <p className="w-full rounded-md border border-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 font-semibold text-[var(--danger)]">
+              This is the Approver's own address. Granting MINTER to the Approver breaks the separation this panel
+              is demonstrating — it would then be able to both grant/revoke and mint.
+            </p>
+          )}
           <button
             className={buttonClass}
             disabled={rolePending || !targetAccount}
@@ -272,18 +319,18 @@ export function DemoView() {
       <Section
         step="2 — Issuer"
         title="Issuer"
-        description="Two addresses hold MINTER on the 2026 season. Either can mint; neither can grant or revoke MINTER on anyone, including itself."
+        description="Whichever addresses currently hold MINTER on the 2026 season — read live, same list as the Approver section above, not a hardcoded pair. Grant MINTER to a new address up in the Approver section and it appears here too, ready to mint as."
       >
         <ActionCard title="Mint as issuer" description="Mints on Hedera, then anchors on Sepolia through the selected issuer's MINTER check." result={issuerMintResult} pending={issuerMintPending}>
           <label className="text-sm text-[var(--text-muted)]">
             issuer{" "}
-            <select
-              value={issuerChoice}
-              onChange={(e) => setIssuerChoice(e.target.value as "issuer1" | "issuer2")}
-              className={inputClass}
-            >
-              <option value="issuer1">Issuer 1 {config ? `(${shortAddr(config.issuer1Address)})` : ""}</option>
-              <option value="issuer2">Issuer 2 {config ? `(${shortAddr(config.issuer2Address)})` : ""}</option>
+            <select value={issuerAddress} onChange={(e) => setIssuerAddress(e.target.value)} className={`${inputClass} font-mono`}>
+              {minterHolders.length === 0 && <option value="">No current MINTER holders</option>}
+              {minterHolders.map((addr) => (
+                <option key={addr} value={addr}>
+                  {shortAddr(addr)}
+                </option>
+              ))}
             </select>
           </label>
           <label className="text-sm text-[var(--text-muted)]">
