@@ -330,6 +330,20 @@ export async function processorHarvestBalance() {
   return BigInt(data.balances[0]?.balance ?? 0);
 }
 
+// Same as above, for the operator -- the source Step 2's transfer actually
+// draws from. The operator's balance includes every gram ever minted to it
+// across every session, not just what a demo take minted moments ago, so
+// showing only the processor's balance made a transfer look wrong on
+// camera (mint 100g, transfer 150g -- correct, since the operator already
+// held more, but not visibly so).
+export async function operatorHarvestBalance() {
+  const res = await fetch(
+    `https://testnet.mirrornode.hedera.com/api/v1/tokens/${hederaTokenId}/balances?account.id=${process.env.HEDERA_OPERATOR_ID}`,
+  );
+  const data = await res.json();
+  return BigInt(data.balances[0]?.balance ?? 0);
+}
+
 // The processor signs an outbound transfer of its own during a transform
 // (input -> retirement), and the harvest token carries a 1 HBAR custom
 // fee -- the processor pays that fee itself as sender, not the operator,

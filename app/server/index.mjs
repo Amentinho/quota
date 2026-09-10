@@ -8,6 +8,7 @@ import {
   doTransfer,
   doTransform,
   processorHarvestBalance,
+  operatorHarvestBalance,
   bronteRegistry,
   SEASON_LABEL,
   hederaClient,
@@ -163,6 +164,15 @@ app.get("/processor-balance", async (req, res) => {
   }
 });
 
+app.get("/operator-balance", async (req, res) => {
+  try {
+    const balance = await operatorHarvestBalance();
+    res.json({ ok: true, headline: `Operator holds ${balance}g of the harvest token.`, raw: { balance: balance.toString() } });
+  } catch (err) {
+    res.json({ ok: false, headline: "Could not read operator balance.", raw: extractRaw(err) });
+  }
+});
+
 app.post("/transform", async (req, res) => {
   const inputGrams = Number(req.body?.inputGrams) || 1000;
   const outputGrams = Number(req.body?.outputGrams);
@@ -195,7 +205,7 @@ app.post("/transform", async (req, res) => {
 
 const server = app.listen(PORT, HOST, () => {
   console.log(`QUOTA demo server listening on http://${HOST}:${PORT} (localhost only, never deployed)`);
-  console.log("Endpoints: GET /config, /processor-balance, POST /mint, /revoke-minter, /grant-minter, /transfer, /transform");
+  console.log("Endpoints: GET /config, /processor-balance, /operator-balance, POST /mint, /revoke-minter, /grant-minter, /transfer, /transform");
 });
 
 process.on("SIGINT", () => {

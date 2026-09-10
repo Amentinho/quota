@@ -201,6 +201,12 @@ export function DemoView() {
   // with a clear refusal from the relayer, before Sepolia or Hedera is
   // touched (see checkProcessorFunded in scripts/relayer.mjs).
   const processorBalanceState = useAsync(() => getJson("/processor-balance").then((r) => r?.raw as { balance: string }), []);
+  // Shown alongside the processor's balance -- Step 2 transfers out of the
+  // operator's WHOLE balance, which includes grams minted in earlier
+  // sessions, not just what Step 1 just minted, so "mint 100, transfer
+  // 150" is correct but looks wrong without the operator's own number on
+  // screen too.
+  const operatorBalanceState = useAsync(() => getJson("/operator-balance").then((r) => r?.raw as { balance: string }), []);
 
   const [flowMintGrams, setFlowMintGrams] = useState(100);
   const [flowMintResult, setFlowMintResult] = useState<ActionResult>(null);
@@ -390,10 +396,16 @@ export function DemoView() {
       >
         <div className="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4">
           <span className="text-base font-semibold text-[var(--text)]">
-            Processor's live harvest-token balance:{" "}
+            Operator: {operatorBalanceState.status === "ready" ? `${operatorBalanceState.data.balance}g` : "…"} · Processor:{" "}
             {processorBalanceState.status === "ready" ? `${processorBalanceState.data.balance}g` : "…"}
           </span>
-          <button className={buttonSecondaryClass} onClick={() => processorBalanceState.reload()}>
+          <button
+            className={buttonSecondaryClass}
+            onClick={() => {
+              operatorBalanceState.reload();
+              processorBalanceState.reload();
+            }}
+          >
             Refresh
           </button>
         </div>
@@ -419,6 +431,7 @@ export function DemoView() {
             onClick={async () => {
               setFlowMintPending(true);
               setFlowMintResult(await post("/mint", { grams: flowMintGrams, certifier: config?.issuer1Address }));
+              operatorBalanceState.reload();
               setFlowMintPending(false);
             }}
           >
@@ -452,6 +465,7 @@ export function DemoView() {
             onClick={async () => {
               setFlowTransferPending(true);
               setFlowTransferResult(await post("/transfer", { grams: flowTransferGrams }));
+              operatorBalanceState.reload();
               processorBalanceState.reload();
               setFlowTransferPending(false);
             }}
