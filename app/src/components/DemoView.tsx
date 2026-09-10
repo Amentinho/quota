@@ -111,7 +111,13 @@ const buttonDangerClass =
   "rounded-md border border-[var(--danger)] px-4 py-2 text-base font-semibold text-[var(--danger)] hover:bg-[var(--danger-soft)] disabled:opacity-50";
 const inputClass = "ml-1 rounded border border-[var(--border)] px-2 py-1";
 
-type Config = { approverAddress: string; issuer1Address: string; issuer2Address: string };
+type Config = {
+  approverAddress: string;
+  issuer1Address: string;
+  issuer2Address: string;
+  treasuryAccountId: string;
+  processorAccountId: string;
+};
 
 async function post(path: string, body?: Record<string, unknown>): Promise<ActionResult> {
   try {
@@ -392,27 +398,39 @@ export function DemoView() {
       <Section
         step="3 — Transform flow"
         title="Mint → Transfer → Transform"
-        description="Three explicit steps, each its own transaction. Nothing tops up the processor account silently — if you transform more than you've transferred in, it fails visibly, before Sepolia or Hedera is touched."
+        description="Three explicit steps, each its own transaction. Nothing tops up the Processor silently — if you transform more than you've transferred in, it fails visibly, before Sepolia or Hedera is touched."
       >
-        <div className="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4">
-          <span className="text-base font-semibold text-[var(--text)]">
-            Treasury (unissued harvest): {operatorBalanceState.status === "ready" ? `${operatorBalanceState.data.balance}g` : "…"} · Processor:{" "}
-            {processorBalanceState.status === "ready" ? `${processorBalanceState.data.balance}g` : "…"}
-          </span>
-          <button
-            className={buttonSecondaryClass}
-            onClick={() => {
-              operatorBalanceState.reload();
-              processorBalanceState.reload();
-            }}
-          >
-            Refresh
-          </button>
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex flex-col gap-1 text-base font-semibold text-[var(--text)]">
+              <span>
+                Treasury {config ? <span className="font-mono text-[var(--text-muted)]">{config.treasuryAccountId}</span> : ""} —{" "}
+                {operatorBalanceState.status === "ready" ? `${BigInt(operatorBalanceState.data.balance).toLocaleString()}g` : "…"}
+              </span>
+              <span>
+                Processor {config ? <span className="font-mono text-[var(--text-muted)]">{config.processorAccountId}</span> : ""} —{" "}
+                {processorBalanceState.status === "ready" ? `${BigInt(processorBalanceState.data.balance).toLocaleString()}g` : "…"}
+              </span>
+            </div>
+            <button
+              className={buttonSecondaryClass}
+              onClick={() => {
+                operatorBalanceState.reload();
+                processorBalanceState.reload();
+              }}
+            >
+              Refresh
+            </button>
+          </div>
+          <p className="mt-3 text-sm text-[var(--text-muted)]">
+            These are Hedera accounts holding tokens, identified by account ID; the roles above are Ethereum
+            addresses identified by ENS names. Different chains, different identity systems.
+          </p>
         </div>
 
         <ActionCard
-          title="Step 1 — Mint (to operator)"
-          description="Mints fresh harvest-token grams to the operator account, as Issuer 1. Does not touch the processor."
+          title="Step 1 — Mint (to Treasury)"
+          description="Mints fresh harvest-token grams to the Treasury, as Issuer 1. Does not touch the Processor."
           result={flowMintResult}
           pending={flowMintPending}
         >
@@ -440,13 +458,13 @@ export function DemoView() {
           <p className="w-full text-sm text-[var(--text-muted)]">
             A separate mint from the one in the Issuer section above — it doesn't consume or relate to that mint in
             any way, both just draw against the same season cap. Only Step 2's transfer below changes the
-            processor's balance shown at the top of this section.
+            Processor's balance shown at the top of this section.
           </p>
         </ActionCard>
 
         <ActionCard
-          title="Step 2 — Transfer (operator → processor)"
-          description="Moves grams from the operator to the processor account. Only after this does the processor's balance (above) actually go up."
+          title="Step 2 — Transfer (Treasury → Processor)"
+          description="Moves grams from the Treasury to the Processor. Only after this does the Processor's balance (above) actually go up."
           result={flowTransferResult}
           pending={flowTransferPending}
         >
@@ -476,7 +494,7 @@ export function DemoView() {
 
         <ActionCard
           title="Step 3 — Transform"
-          description="Claims input grams are consumed to produce output grams of kernel. Refuses up front — no transaction at all — if the processor (balance shown above) doesn't hold at least the claimed input. Otherwise checks the on-chain yield ceiling before touching Hedera. Try 1000g in / 450g out after transferring only 100g, to see the funding refusal on screen."
+          description="Claims input grams are consumed to produce output grams of kernel. Refuses up front — no transaction at all — if the Processor (balance shown above) doesn't hold at least the claimed input. Otherwise checks the on-chain yield ceiling before touching Hedera. Try 1000g in / 450g out after transferring only 100g, to see the funding refusal on screen."
           result={transformResult}
           pending={transformPending}
         >
@@ -530,7 +548,7 @@ export function DemoView() {
                     </span>
                     {underfunded && (
                       <p className="mt-1 font-semibold text-[var(--danger)]">
-                        processor holds {processorBalance}g, this claims {transformInputGrams}g in — should be refused before any
+                        Processor holds {processorBalance}g, this claims {transformInputGrams}g in — should be refused before any
                         transaction is sent
                       </p>
                     )}

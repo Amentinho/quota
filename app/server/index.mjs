@@ -56,17 +56,19 @@ function freshLotRef(prefix) {
 
 app.get("/health", (req, res) => res.json({ ok: true }));
 
-// Public addresses only, never a key -- lets the panel show/select real
-// account addresses without hardcoding them into DemoView.tsx (which
-// would drift from .env the next time an address rotates).
+// Public addresses/account IDs only, never a key -- lets the panel
+// show/select real accounts without hardcoding them into DemoView.tsx
+// (which would drift from .env the next time one rotates).
 app.get("/config", (req, res) => {
   res.json({
     ok: true,
-    headline: "Known role addresses.",
+    headline: "Known role addresses and Hedera account IDs.",
     raw: {
       approverAddress: process.env.ENS_APPROVER_ADDRESS,
       issuer1Address: process.env.ENS_CERTIFIER_ADDRESS,
       issuer2Address: process.env.ENS_ISSUER_2_ADDRESS,
+      treasuryAccountId: process.env.HEDERA_OPERATOR_ID,
+      processorAccountId: process.env.HEDERA_PROCESSOR_ACCOUNT_ID,
     },
   });
 });
