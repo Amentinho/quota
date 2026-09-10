@@ -396,7 +396,7 @@ export function DemoView() {
       >
         <div className="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4">
           <span className="text-base font-semibold text-[var(--text)]">
-            Operator: {operatorBalanceState.status === "ready" ? `${operatorBalanceState.data.balance}g` : "…"} · Processor:{" "}
+            Treasury (unissued harvest): {operatorBalanceState.status === "ready" ? `${operatorBalanceState.data.balance}g` : "…"} · Processor:{" "}
             {processorBalanceState.status === "ready" ? `${processorBalanceState.data.balance}g` : "…"}
           </span>
           <button
