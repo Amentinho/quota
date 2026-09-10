@@ -397,6 +397,11 @@ export function DemoView() {
           >
             Mint
           </button>
+          <p className="w-full text-sm text-[var(--text-muted)]">
+            A separate mint from the one in the Issuer section above — it doesn't consume or relate to that mint in
+            any way, both just draw against the same season cap. Only Step 2's transfer below changes the
+            processor's balance shown at the top of this section.
+          </p>
         </ActionCard>
 
         <ActionCard
