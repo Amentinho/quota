@@ -319,8 +319,10 @@ export async function doTransfer(grams) {
 // Live balance check, no local bookkeeping -- the source of truth for
 // "does the processor have enough to transform" is the mirror node, not
 // a counter this process maintains, since a fresh server restart (or a
-// second caller) would desync a local counter immediately.
-async function processorHarvestBalance() {
+// second caller) would desync a local counter immediately. Exported so
+// the demo server can show it on screen as its own explicit step, not
+// something a transform call resolves invisibly on the caller's behalf.
+export async function processorHarvestBalance() {
   const res = await fetch(
     `https://testnet.mirrornode.hedera.com/api/v1/tokens/${hederaTokenId}/balances?account.id=${processorAccountId}`,
   );
@@ -360,29 +362,28 @@ async function ensureProcessorHbar() {
   return { topUpNeeded: true, toppedUpHbar: PROCESSOR_HBAR_TOPUP };
 }
 
-// Ensures the processor holds at least `grams` of the harvest token before
-// a transform's real Hedera leg runs, topping it up from the operator if
-// not -- so the demo panel's "transform" button stays repeatable across
-// takes without a separate manual funding step each time.
-export async function ensureProcessorFunded(grams) {
+// Refuses up front, before touching Sepolia or Hedera, if the processor
+// doesn't hold enough of the harvest token for this transform -- no
+// silent top-up. An earlier version of this function (ensureProcessorFunded)
+// minted and transferred a shortfall in automatically so the demo panel's
+// "transform" button stayed repeatable across takes; that made the demo
+// misleading (mint 100g, then transform 1000g, and it would just work,
+// with the extra 900g materializing off-screen) and briefly took the
+// harvest season's inCirculationGrams negative on the live dashboard when
+// an earlier version of the top-up used a bare transfer instead of a fresh
+// anchored mint. The fix now is transparency, not a smarter top-up:
+// funding the processor is its own explicit step (mint, then transfer --
+// see scripts/relayer.mjs's own `mint`/`transfer` commands and the demo
+// panel's Transform flow section), and a transform that arrives
+// underfunded fails cleanly with a message that says exactly why.
+async function checkProcessorFunded(grams) {
   const balance = await processorHarvestBalance();
-  if (balance >= BigInt(grams)) return { topUpNeeded: false, balance: balance.toString() };
-  const shortfall = Number(BigInt(grams) - balance);
-  console.log(`Processor holds ${balance}g, needs ${grams}g -- minting ${shortfall}g fresh and transferring it in...`);
-  // Minted fresh (anchored) rather than moved from the operator's
-  // pre-existing balance: a transfer alone would grow retiredGrams at
-  // the next transform without growing mintedGrams to match, since
-  // nothing anchors a new UnitsMinted for tokens that were already
-  // sitting in the operator's balance before this run -- inCirculationGrams
-  // (mintedGrams - retiredGrams) went visibly negative on the dashboard
-  // from exactly this, caught by actually clicking the demo panel, not
-  // anticipated in the design. Every top-up is now its own real,
-  // anchored mint, so repeated demo takes stay balanced instead of
-  // compounding a growing shortfall.
-  const certifier = process.env.ENS_CERTIFIER_ADDRESS;
-  await doMint(shortfall, `demo-topup-${Date.now()}`, certifier);
-  await doTransfer(shortfall);
-  return { topUpNeeded: true, toppedUp: shortfall.toString(), mintedFresh: true };
+  if (balance < BigInt(grams)) {
+    throw new Error(
+      `REFUSED: processor holds ${balance}g, needs ${grams}g for this transform. No transaction sent. Run 'transfer' to fund it first.`,
+    );
+  }
+  return balance;
 }
 
 // Retirement is a real Hedera transfer to the dedicated retirement account
@@ -440,16 +441,25 @@ async function doRetireKernel(grams, lotRef) {
   console.log("Etherscan:", `https://sepolia.etherscan.io/tx/${receipt.hash}`);
 }
 
-// The transformation itself. The ceiling check (recordTransform, which
-// reads yieldBp live from ENS and reverts if outputGrams exceeds what that
-// ratio permits) runs FIRST, on Sepolia, before any real Hedera token is
-// moved -- so a bad claim fails cleanly with nothing to unwind. Only after
-// that succeeds do the real Hedera legs run: input grams retired (processor
-// -> retirement, signed with the deterministic processor key, NOT burned),
-// output grams minted fresh on the kernel token, and both anchored.
+// The transformation itself. Two independent refusals guard the real
+// Hedera legs, in order, each with nothing to unwind if it fires:
+// (1) the processor must already hold enough of the harvest token --
+// checked off-chain, before Sepolia is even touched (see
+// checkProcessorFunded -- no silent top-up, unlike the superseded
+// ensureProcessorFunded); (2) the yield ceiling (recordTransform, which
+// reads yieldBp live from ENS and reverts if outputGrams exceeds what
+// that ratio permits) runs on Sepolia before any real Hedera token moves.
+// Only after both hold do the real Hedera legs run: input grams retired
+// (processor -> retirement, signed with the deterministic processor key,
+// NOT burned), output grams minted fresh on the kernel token, and both
+// anchored.
 export async function doTransform(inputGrams, outputGrams, lotRef, productType) {
+  console.log(`Checking the processor holds enough of the harvest token for this transform...`);
+  const processorBalance = await checkProcessorFunded(inputGrams);
+  console.log(`  processor holds ${processorBalance}g, needs ${inputGrams}g. Proceeding.`);
+
   console.log(
-    `Recording transform: ${inputGrams}g (lot ${lotRef}) -> claimed ${outputGrams}g ${productType}. Checking the yield ceiling on-chain first...`,
+    `Recording transform: ${inputGrams}g (lot ${lotRef}) -> claimed ${outputGrams}g ${productType}. Checking the yield ceiling on-chain...`,
   );
   const transformTx = await anchor.recordTransform(
     SEASON_ID,
@@ -463,12 +473,12 @@ export async function doTransform(inputGrams, outputGrams, lotRef, productType) 
   console.log("Transformed anchored -- ceiling held. Sepolia tx:", transformReceipt.hash);
   console.log("Etherscan:", `https://sepolia.etherscan.io/tx/${transformReceipt.hash}`);
 
-  // Ceiling held on Sepolia -- only now is it safe to touch real Hedera
-  // balances. Top up the processor's token balance and its HBAR (it pays
-  // the harvest token's custom fee itself when it signs the outbound
-  // transfer below) first, if this call needs more of either than it
-  // currently holds.
-  await ensureProcessorFunded(inputGrams);
+  // Both checks held -- only now is it safe to touch real Hedera balances.
+  // Top up the processor's HBAR (it pays the harvest token's custom fee
+  // itself when it signs the outbound transfer below) if needed -- this is
+  // gas for signing, unrelated to the grams-conservation story above, so
+  // it stays an automatic infrastructure courtesy rather than a fourth
+  // explicit step.
   await ensureProcessorHbar();
 
   console.log(`Retiring ${inputGrams}g of the input from the processor account (not burning)...`);

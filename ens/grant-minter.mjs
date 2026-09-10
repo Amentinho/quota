@@ -5,9 +5,9 @@ import { MINTER_ROLE } from "./roles.mjs";
 const abi = (name) => JSON.parse(readFileSync(new URL(`./abi/${name}.abi.json`, import.meta.url)));
 
 const provider = new ethers.JsonRpcProvider(process.env.SEPOLIA_RPC_URL);
-const wallet = new ethers.Wallet(process.env.SEPOLIA_DEPLOYER_KEY, provider);
 
-export function bronteRegistryWrite(registryAddr) {
+export function bronteRegistryWrite(registryAddr, signerPrivateKey) {
+  const wallet = new ethers.Wallet(signerPrivateKey, provider);
   return new ethers.Contract(registryAddr, abi("PermissionedRegistry"), wallet);
 }
 
@@ -17,13 +17,20 @@ export function bronteRegistryWrite(registryAddr) {
 // note in app/server about looking this up live rather than trusting a
 // cached value, after ENS_SEASON_TOKEN_ID in .env was once found stale
 // (a TokenRegenerated event had moved it) by exactly this kind of thing.
-export async function setMinterRole(action, registryAddr, resource, account) {
+//
+// signerPrivateKey is explicit, not defaulted to the relayer's Sepolia key
+// -- the Approver, not the relayer/infrastructure signer, is the one who
+// actually holds MINTER_ROLE_ADMIN and is authorized to grant/revoke
+// MINTER. Conflating the two would undermine the separation the three-tier
+// structure (Consortium / Approver / Issuer) exists to enforce. See
+// CLAUDE.md, "Three-level ENS permission structure."
+export async function setMinterRole(action, registryAddr, resource, account, signerPrivateKey) {
   if (!["grant", "revoke"].includes(action)) {
     throw new Error(`setMinterRole: action must be "grant" or "revoke", got "${action}"`);
   }
-  const registry = bronteRegistryWrite(registryAddr);
+  const registry = bronteRegistryWrite(registryAddr, signerPrivateKey);
   const method = action === "grant" ? "grantRoles" : "revokeRoles";
-  console.log(`${action === "grant" ? "Granting" : "Revoking"} MINTER role: resource ${resource}, account ${account}`);
+  console.log(`${action === "grant" ? "Granting" : "Revoking"} MINTER role: resource ${resource}, account ${account}, signer ${registry.runner.address}`);
 
   const tx = await registry[method](BigInt(resource), MINTER_ROLE, account);
   const receipt = await tx.wait();
@@ -32,16 +39,19 @@ export async function setMinterRole(action, registryAddr, resource, account) {
   const has = await registry.hasRoles(BigInt(resource), MINTER_ROLE, account);
   console.log("hasRoles(MINTER) now:", has);
 
-  return { txHash: receipt.hash, hasRoleNow: has };
+  return { txHash: receipt.hash, hasRoleNow: has, signer: registry.runner.address };
 }
 
 const isMain = import.meta.url === `file://${process.argv[1]}`;
 
 if (isMain) {
-  // Usage: node grant-minter.mjs <grant|revoke> <registryAddress> <resourceTokenId> <account>
-  const [, , action, registryAddr, resource, account] = process.argv;
+  // Usage: node grant-minter.mjs <grant|revoke> <registryAddress> <resourceTokenId> <account> [signerPrivateKey]
+  // signerPrivateKey defaults to ENS_APPROVER_KEY -- the Approver is the
+  // one who actually holds MINTER_ROLE_ADMIN post-rotation; pass a
+  // different key explicitly only for a one-off case that needs it.
+  const [, , action, registryAddr, resource, account, signerPrivateKey] = process.argv;
   if (!["grant", "revoke"].includes(action) || !registryAddr || !resource || !account) {
-    throw new Error("Usage: node grant-minter.mjs <grant|revoke> <registryAddress> <resourceTokenId> <account>");
+    throw new Error("Usage: node grant-minter.mjs <grant|revoke> <registryAddress> <resourceTokenId> <account> [signerPrivateKey]");
   }
-  await setMinterRole(action, registryAddr, resource, account);
+  await setMinterRole(action, registryAddr, resource, account, signerPrivateKey || process.env.ENS_APPROVER_KEY);
 }

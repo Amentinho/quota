@@ -142,6 +142,23 @@ Expiry gating uses two different mechanisms, and getting this right mattered for
 
 **Enhanced Access Control**, closing item 5: `MINTER` is a custom role bit (nybble 10 of `PermissionedRegistry`'s role space — unused by ENS's own `RegistryRolesLib`, confirmed by reading it, not guessed). Granting or revoking it is one `grantRoles`/`revokeRoles` call on the season's resource — no contract redeploy, no code change, scoped to that one season.
 
+### Three-level permission structure, with no contract change
+
+`MINTER_ROLE`'s own admin bit, `MINTER_ROLE_ADMIN` (`MINTER_ROLE << 128`), splits the single "certifier" role above into two distinct levels, entirely at the ENS layer — `QuotaAnchor` only ever does a read-only `hasRoles` check for `MINTER`, so nothing about the contract changes:
+
+- **Consortium** — owns `bronte.quota.eth`, holds the parent registry's `REGISTRAR` role. Unchanged from above.
+- **Approver** — holds `MINTER_ROLE_ADMIN` on the season, not `MINTER`. Can grant and revoke `MINTER` on other addresses; cannot mint. A dedicated, freshly-derived keypair, never the relayer's own address — conflating the infrastructure signer with the policy approver would undermine the separation this exists to prove.
+- **Issuer** — two addresses hold `MINTER`. Either can mint; neither can grant or revoke `MINTER` on anyone, including itself. (`ENS_CERTIFIER_ADDRESS` from the proofs below is now "Issuer 1" — same address, same role, extended terminology.)
+
+**Getting `MINTER_ROLE_ADMIN` onto a genuinely new address turned out to need more than a `grantRoles` call**, confirmed empirically rather than assumed: `EnhancedAccessControl`'s generic "admin of role R is `R << 128`" scheme has no valid admin bit for a role that's already in the top half of the 256-bit space — `MINTER_ROLE_ADMIN` is bit 168, and `168 + 128 = 296` overflows a `uint256`, so the shift is simply discarded (`0`). A `grantRoles(tokenId, MINTER_ROLE_ADMIN, newAddress)` call from the *current* admin-bit holder reverts; so does `grantRootRoles`, since the deployer only holds the specific root bits granted at registry deployment (`REGISTRAR`, `REGISTRAR_ADMIN`, etc.), not a blanket root grant covering this custom bit. The only place an admin-tier bit can be assigned at all is `register()`'s `extraRoleBitmap` parameter — which grants it to exactly one address, the new owner. **Practical consequence: rotating who holds an admin-tier role isn't a grant, it's an unregister + re-register.** `ens/rotate-season-admin.mjs` does exactly that — it was run once, live, to move `MINTER_ROLE_ADMIN` from the relayer onto the Approver's own address (`register(label, newOwner, subregistry, resolver, extraRoleBitmap, expiry)` with `newOwner` = the Approver, `extraRoleBitmap = MINTER_ROLE_ADMIN`) — the identical bootstrap pattern already used once for `kernel-2026`'s role gap (see below). Resolver, node, and every text record survive the rotation untouched (they're keyed by `(resolver, node)`, neither of which unregister/re-register touches — confirmed by reading `quota.cap.g` and `quota.yield.kernel.bp` back afterward, not assumed); the season's *previous* admin holder — the relayer, from the original registration — keeps its grant on the now-superseded resource id, inert since nothing resolves through it anymore. Left as-is rather than cleaned up.
+
+Proven, not just configured: the Approver's own key — not the relayer's — signed real `grantRoles`/`revokeRoles` transactions granting `MINTER` to both issuers. A real 1-gram mint by Issuer 1 confirmed the whole pipeline still works post-rotation. And a mint attempt using the Approver's own address as certifier was refused by the relayer's off-chain check before any transaction was sent:
+```
+REFUSED: 0x2006deb6e0E8ed48E2B2AfAf463Ae3E480B9E375 does not hold MINTER role
+for "2026". No transaction sent.
+```
+Same refusal path as proof (b) below — holding `MINTER_ROLE_ADMIN` does not imply holding `MINTER`.
+
 ### Proof, three ways, each with the real status code
 
 **(a) Certifier mints against the season — succeeds.**
