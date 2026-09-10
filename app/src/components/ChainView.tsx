@@ -58,6 +58,14 @@ function buildTimeline(lots: Lot[], transfersBySeasonId: Record<string, SeasonTr
       });
     }
     for (const tr of transfersBySeasonId[lot.season.id] ?? []) {
+      // Custody transfers are anchored season-scoped, not lot-scoped or
+      // address-scoped (see the Transfer type's note in lib/subgraph.ts) --
+      // every transfer this relayer has ever anchored carries the same
+      // relayer address on both sides, since Hedera account IDs have no
+      // Ethereum-address equivalent to anchor instead. A "from X to X" card
+      // shows zero real information and reads as broken, so it's dropped
+      // from the journey rather than rendered as a step.
+      if (tr.from.toLowerCase() === tr.to.toLowerCase()) continue;
       steps.push({
         kind: "transfer",
         timestamp: tr.blockTimestamp,
@@ -144,13 +152,20 @@ async function loadLotView(lotRef: string) {
   return buildTimeline(lots, transfersBySeasonId);
 }
 
+// The clean, deliberately-run full journey (mint -> transfer -> transform at
+// the ceiling -> retire both sides) -- preferred as the default so the view
+// opens on the most complete lot rather than whatever sorts first. Falls
+// back to the first known lot if this one isn't present (e.g. a fresh
+// subgraph deployment before it's been run again).
+const PREFERRED_DEFAULT_LOT = "lot-2026-005";
+
 export function ChainView() {
   const lotsState = useAsync(fetchKnownLotRefs, []);
   const [selectedLot, setSelectedLot] = useState<string | null>(null);
 
   useEffect(() => {
     if (lotsState.status === "ready" && lotsState.data.length > 0 && selectedLot === null) {
-      setSelectedLot(lotsState.data[0]);
+      setSelectedLot(lotsState.data.includes(PREFERRED_DEFAULT_LOT) ? PREFERRED_DEFAULT_LOT : lotsState.data[0]);
     }
   }, [lotsState, selectedLot]);
 
