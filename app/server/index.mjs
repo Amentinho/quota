@@ -109,6 +109,9 @@ app.post("/revoke-minter", async (req, res) => {
       account,
       process.env.ENS_APPROVER_KEY,
     );
+    if (result.noop) {
+      return res.json({ ok: true, noop: true, headline: result.message, raw: result });
+    }
     res.json({ ok: true, headline: `MINTER role revoked from ${account}.`, raw: result });
   } catch (err) {
     res.json({ ok: false, headline: "Revoke failed.", raw: extractRaw(err) });
@@ -129,6 +132,9 @@ app.post("/grant-minter", async (req, res) => {
       account,
       process.env.ENS_APPROVER_KEY,
     );
+    if (result.noop) {
+      return res.json({ ok: true, noop: true, headline: result.message, raw: result });
+    }
     res.json({ ok: true, headline: `MINTER role granted to ${account}.`, raw: result });
   } catch (err) {
     res.json({ ok: false, headline: "Grant failed.", raw: extractRaw(err) });

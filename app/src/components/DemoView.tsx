@@ -9,14 +9,25 @@ import { shortAddr } from "../lib/format";
 // key, but it has no reason to exist where that server isn't reachable.
 const SERVER_URL = "http://localhost:4317";
 
-type ActionResult = { ok: boolean; headline: string; lotRef?: string; raw: unknown } | null;
+type ActionResult = { ok: boolean; noop?: boolean; headline: string; lotRef?: string; raw: unknown } | null;
 
 function ResultBlock({ result }: { result: ActionResult }) {
   if (!result) return null;
+  // noop is neither success nor failure -- the requested change was
+  // already true on-chain (grant on an existing holder, revoke on a
+  // non-holder), so nothing was sent. Shown neutral, not green or red, so
+  // it doesn't read as a refusal or an accomplishment.
+  const style = result.noop
+    ? "border-[var(--border)] bg-[var(--bg)]"
+    : result.ok
+      ? "border-[var(--accent)] bg-[var(--accent-soft)]"
+      : "border-[var(--danger)] bg-[var(--danger-soft)]";
+  const textStyle = result.noop ? "text-[var(--text-muted)]" : result.ok ? "text-[var(--accent)]" : "text-[var(--danger)]";
+  const label = result.noop ? "NO-OP" : result.ok ? "SUCCESS" : "FAILED / REFUSED";
   return (
-    <div className={`mt-3 rounded-lg border p-3 ${result.ok ? "border-[var(--accent)] bg-[var(--accent-soft)]" : "border-[var(--danger)] bg-[var(--danger-soft)]"}`}>
-      <p className={`text-base font-semibold ${result.ok ? "text-[var(--accent)]" : "text-[var(--danger)]"}`}>
-        {result.ok ? "SUCCESS" : "FAILED / REFUSED"} — {result.headline}
+    <div className={`mt-3 rounded-lg border p-3 ${style}`}>
+      <p className={`text-base font-semibold ${textStyle}`}>
+        {label} — {result.headline}
       </p>
       {result.lotRef && <p className="mt-1 text-sm text-[var(--text-muted)]">lot: {result.lotRef}</p>}
       <p className="mt-2 mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Raw response</p>
