@@ -54,6 +54,22 @@ async function findCurrentMinterHolders(registry: ethers.Contract, tokenId: bigi
   return checks.filter((c) => c.has).map((c) => c.account);
 }
 
+// A single text record, read live -- no caching, no event scan. Lighter
+// than readSeasonEnsState for a caller (the Demo tab's transform ceiling
+// display) that only needs one value, read once, not the season's whole
+// ENS state including a role-holder event scan.
+export async function readTextRecord(label: string, key: string): Promise<string> {
+  const p = getProvider();
+  const registry = new ethers.Contract(ENS_BRONTE_REGISTRY_ADDRESS, REGISTRY_ABI, p);
+  const node = ethers.namehash(`${label}.bronte.quota.eth`);
+  const resolverAddress: string = await registry.getResolver(label);
+  if (resolverAddress === ethers.ZeroAddress) {
+    throw new EnsReadError(`"${label}.bronte.quota.eth" does not currently resolve.`);
+  }
+  const resolver = new ethers.Contract(resolverAddress, RESOLVER_ABI, p);
+  return resolver.text(node, key);
+}
+
 export async function readSeasonEnsState(label: string): Promise<SeasonEnsState> {
   const p = getProvider();
   const registry = new ethers.Contract(ENS_BRONTE_REGISTRY_ADDRESS, REGISTRY_ABI, p);

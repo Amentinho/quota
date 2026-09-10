@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useAsync } from "../lib/useAsync";
+import { readTextRecord } from "../lib/ens";
 
 // Local-only: this view fetches a server on localhost that holds real
 // signing keys in memory. It's gated out of the production build by
@@ -63,11 +65,17 @@ export function DemoView() {
   const [roleResult, setRoleResult] = useState<ActionResult>(null);
   const [rolePending, setRolePending] = useState(false);
 
-  const [reject500Result, setReject500Result] = useState<ActionResult>(null);
-  const [reject500Pending, setReject500Pending] = useState(false);
+  // Read once, live from the harvest season's own ENS resolver -- the exact
+  // record recordTransform itself reads (quota.yield.<productType>.bp) at
+  // transform time. The ceiling shown below is recomputed from this value on
+  // every keystroke, but the ENS read itself only needs to happen once: the
+  // ratio doesn't change while someone's typing a candidate input amount.
+  const yieldBpState = useAsync(() => readTextRecord("2026", "quota.yield.kernel.bp"), []);
 
-  const [success450Result, setSuccess450Result] = useState<ActionResult>(null);
-  const [success450Pending, setSuccess450Pending] = useState(false);
+  const [transformInputGrams, setTransformInputGrams] = useState(1000);
+  const [transformOutputGrams, setTransformOutputGrams] = useState(450);
+  const [transformResult, setTransformResult] = useState<ActionResult>(null);
+  const [transformPending, setTransformPending] = useState(false);
 
   async function post(path: string, body?: Record<string, unknown>): Promise<ActionResult> {
     try {
@@ -152,41 +160,57 @@ export function DemoView() {
       </ActionCard>
 
       <ActionCard
-        title="Transform — claim 500g (over the ceiling)"
-        description="1000g in, claiming 500g out. The real yield ratio is 45% (450g) — this should revert on Sepolia before any Hedera token moves."
-        result={reject500Result}
-        pending={reject500Pending}
+        title="Transform"
+        description="Both fields are editable. The ceiling below is computed live — floor(input × yieldBp / 10000), yieldBp read from ENS — not hardcoded to any one input/output pair. Pre-filled at 1000g → 450g (exactly the 45% ceiling) for a one-click happy path; type over either field to try a different amount, including one that exceeds the ceiling."
+        result={transformResult}
+        pending={transformPending}
       >
-        <button
-          className={buttonSecondaryClass}
-          disabled={reject500Pending}
-          onClick={async () => {
-            setReject500Pending(true);
-            setReject500Result(await post("/transform", { inputGrams: 1000, outputGrams: 500 }));
-            setReject500Pending(false);
-          }}
-        >
-          Transform 1000g → claim 500g
-        </button>
-      </ActionCard>
-
-      <ActionCard
-        title="Transform — claim 450g (at the ceiling)"
-        description="1000g in, claiming exactly 450g out — the real 45% yield ratio read live from ENS. Should succeed: input retired, output minted, both anchored."
-        result={success450Result}
-        pending={success450Pending}
-      >
+        <label className="text-sm text-[var(--text-muted)]">
+          grams in{" "}
+          <input
+            type="number"
+            value={transformInputGrams}
+            onChange={(e) => setTransformInputGrams(Number(e.target.value))}
+            className="ml-1 w-24 rounded border border-[var(--border)] px-2 py-1"
+          />
+        </label>
+        <label className="text-sm text-[var(--text-muted)]">
+          grams claimed out{" "}
+          <input
+            type="number"
+            value={transformOutputGrams}
+            onChange={(e) => setTransformOutputGrams(Number(e.target.value))}
+            className="ml-1 w-24 rounded border border-[var(--border)] px-2 py-1"
+          />
+        </label>
         <button
           className={buttonClass}
-          disabled={success450Pending}
+          disabled={transformPending}
           onClick={async () => {
-            setSuccess450Pending(true);
-            setSuccess450Result(await post("/transform", { inputGrams: 1000, outputGrams: 450 }));
-            setSuccess450Pending(false);
+            setTransformPending(true);
+            setTransformResult(await post("/transform", { inputGrams: transformInputGrams, outputGrams: transformOutputGrams }));
+            setTransformPending(false);
           }}
         >
-          Transform 1000g → claim 450g
+          Transform
         </button>
+
+        <div className="w-full text-sm text-[var(--text-muted)]">
+          {yieldBpState.status === "loading" && "Reading quota.yield.kernel.bp from ENS…"}
+          {yieldBpState.status === "error" && `Could not read the yield ratio from ENS: ${yieldBpState.error}`}
+          {yieldBpState.status === "ready" &&
+            (() => {
+              const yieldBp = Number(yieldBpState.data);
+              const ceiling = Math.floor((transformInputGrams * yieldBp) / 10000);
+              const overCeiling = transformOutputGrams > ceiling;
+              return (
+                <span className={overCeiling ? "font-semibold text-[var(--danger)]" : ""}>
+                  at {yieldBp}bp, ceiling = floor({transformInputGrams} × {yieldBp} / 10000) = {ceiling}g
+                  {overCeiling && ` — claiming ${transformOutputGrams}g exceeds this, should revert`}
+                </span>
+              );
+            })()}
+        </div>
       </ActionCard>
     </div>
   );
