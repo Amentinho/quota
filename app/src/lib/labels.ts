@@ -19,6 +19,24 @@ export function seasonLabel(id: string): string {
   return KNOWN_SEASON_NAMES[id.toLowerCase()] ?? id;
 }
 
+// Presentation only, same story as the two maps above: an address has no
+// on-chain reverse record pointing back to a name, so "which ENS name
+// resolves to this address" isn't something to look up, it's something we
+// already know because we're the ones who registered it (see
+// ens/register-subname.mjs + ens/set-addr-record.mjs). The role checks
+// this project actually authorizes against (hasRoles on the season
+// resource) never consult these names or this map -- an address not in
+// here just renders as an address, same as before this existed.
+const KNOWN_ROLE_NAMES: Record<string, string> = {
+  "0x2006deb6e0e8ed48e2b2afaf463ae3e480b9e375": "approver.bronte.quota.eth",
+  "0x7dfdd0fd40a1e4208bce04ac534b493ec4627ec6": "issuer-1.bronte.quota.eth",
+  "0x1bea120ffdc00b26acb8357838e7eebae8464edb": "issuer-2.bronte.quota.eth",
+};
+
+export function roleName(address: string): string | null {
+  return KNOWN_ROLE_NAMES[address.toLowerCase()] ?? null;
+}
+
 // The subgraph correctly flags every Hedera mint with no matching anchor --
 // but "unanchored" doesn't distinguish intent. These three are the only
 // findings that exist today; classified here from what we know about how

@@ -2,6 +2,22 @@ import { useEffect, useState } from "react";
 import { useAsync } from "../lib/useAsync";
 import { readTextRecord, readSeasonEnsState } from "../lib/ens";
 import { shortAddr } from "../lib/format";
+import { roleName } from "../lib/labels";
+
+// Name as primary, address as secondary -- falls back to just the address
+// (no secondary line) for anything not in labels.ts's KNOWN_ROLE_NAMES.
+// Purely a display choice: every role check this panel exercises still
+// goes through hasRoles against the season resource, never this name.
+function RoleIdentity({ address, className = "" }: { address: string; className?: string }) {
+  const name = roleName(address);
+  if (!name) return <span className={`font-mono ${className}`}>{shortAddr(address)}</span>;
+  return (
+    <span className={className}>
+      <span className="font-semibold">{name}</span>{" "}
+      <span className="font-mono text-[var(--text-muted)]">({shortAddr(address)})</span>
+    </span>
+  );
+}
 
 // Local-only: this view fetches a server on localhost that holds real
 // signing keys in memory. It's gated out of the production build by
@@ -134,8 +150,8 @@ function MinterHolderList({ holders }: { holders: string[] }) {
   return (
     <ul className="flex flex-wrap gap-2">
       {holders.map((addr) => (
-        <li key={addr} className="rounded-md bg-[var(--accent-soft)] px-3 py-1 font-mono text-sm text-[var(--accent)]" title={addr}>
-          {shortAddr(addr)}
+        <li key={addr} className="rounded-md bg-[var(--accent-soft)] px-3 py-1 text-sm text-[var(--accent)]" title={addr}>
+          <RoleIdentity address={addr} />
         </li>
       ))}
     </ul>
@@ -240,7 +256,7 @@ export function DemoView() {
       >
         {config && (
           <p className="text-sm text-[var(--text-muted)]">
-            Approver address: <span className="font-mono text-[var(--text)]">{config.approverAddress}</span>
+            Approver: <RoleIdentity address={config.approverAddress} className="text-[var(--text)]" />
           </p>
         )}
 
@@ -339,7 +355,7 @@ export function DemoView() {
               {minterHolders.length === 0 && <option value="">No current MINTER holders</option>}
               {minterHolders.map((addr) => (
                 <option key={addr} value={addr}>
-                  {shortAddr(addr)}
+                  {roleName(addr) ? `${roleName(addr)} (${shortAddr(addr)})` : shortAddr(addr)}
                 </option>
               ))}
             </select>
