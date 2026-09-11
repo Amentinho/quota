@@ -588,9 +588,23 @@ export function DemoView() {
             <p className="mt-2 text-sm text-[var(--text-muted)]">
               The token's maximum supply is fixed when it's created and can never be raised. Proven once, for real,
               while this project was built: minting up to the exact cap succeeded, and the very next gram was
-              rejected by Hedera itself (status <code>TOKEN_MAX_SUPPLY_REACHED</code>) — protocol-level consensus,
-              not application code. Not repeatable live in this panel (it would mean minting the entire
-              3.4-billion-gram harvest cap) — see the README for the real transaction record.
+              rejected by Hedera itself — not application code, the network's own consensus refusing the
+              transaction —{" "}
+              <a
+                href="https://hashscan.io/testnet/transaction/0.0.10323351-1788864821-400173065"
+                target="_blank"
+                rel="noreferrer"
+                className="font-semibold text-[var(--accent)] underline"
+              >
+                open the actual failed transaction on HashScan
+              </a>
+              , status <code>TOKEN_MAX_SUPPLY_REACHED</code>, permanent and independently checkable by anyone.
+            </p>
+            <p className="mt-2 text-sm text-[var(--text-muted)]">
+              Not a button in this panel, deliberately: reproducing it would mean minting the entire
+              3.4-billion-gram harvest cap first, and unlike the other three proofs, that action can't be undone
+              afterward to leave the panel ready for the next viewer — the cap, once reached, stays reached. The
+              linked transaction above is the real thing, not a re-enactment.
             </p>
           </li>
           <li className="rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
