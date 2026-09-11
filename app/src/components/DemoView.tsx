@@ -543,14 +543,22 @@ export function DemoView() {
           never exceed what was actually grown, no matter how many times it's transferred or processed.
         </p>
 
+        <p className="text-base text-[var(--text)]">
+          A <strong>season</strong> is a single harvest year for a single denomination — this demo's season is the
+          2026 Bronte harvest. Each season has its own ENS name (<code>2026.bronte.quota.eth</code>), its own cap,
+          and its own token. A season's ENS expiry is the entire window during which minting is allowed for it,
+          checked live on every mint attempt — it's why "Season" is its own tab elsewhere in this dashboard, not
+          just a word used in passing here.
+        </p>
+
         <dl className="flex flex-col gap-3 rounded-lg bg-[var(--bg)] p-4 text-sm">
           <div>
             <dt className="font-semibold text-[var(--text)]">Consortium</dt>
             <dd className="text-[var(--text-muted)]">
-              The <em>Consorzio del Pistacchio Verde di Bronte DOP</em> — the real-world organization that owns the
-              "Bronte PDO Pistachio" designation (PDO: Protected Designation of Origin, an EU status; DOP is the
-              Italian abbreviation for the same thing) and this project's ENS name. Opens seasons and sets the
-              harvest cap. <strong>Does not certify individual producers.</strong>
+              The <em>Consorzio del Pistacchio Verde di Bronte DOP</em> — owns the denomination (the legal right to
+              the name "Pistacchio Verde di Bronte DOP," an EU Protected Designation of Origin) and the ENS name
+              that represents it. Opens seasons and sets the harvest cap. <strong>Does not certify individual
+              producers.</strong>
             </dd>
           </div>
           <div>
