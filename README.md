@@ -14,6 +14,57 @@ The number nobody can compute is how much product claims Bronte origin at any gi
 - **Demo data, clearly labeled as such and nowhere presented as a market figure**: the harvest cap (3,400,000,000 grams — a round illustrative number in the ballpark of the real range cited above, not itself drawn from any single one of those sources) and the one real lot run through the full mint → transfer → transform → retire flow (1,000 grams — a demonstration quantity, not a claim about real harvest volume). The *mechanism* these numbers exercise — conservation enforced by token supply, a yield ratio enforced on-chain — is exactly what a real deployment at real harvest scale would run; only the numbers are demo-sized, not the logic.
 - **What a judge can check without trusting this README**: the contract's verified source and every anchor event on [Etherscan](https://sepolia.etherscan.io/address/0x13A0Bb73C5a629dF1a8c91F99213d6077cc1acE2#code); every indexed entity via the [live subgraph endpoint](https://api.studio.thegraph.com/query/1758548/quota/v0.0.2) (three example queries below, with real returned output, not query text); the ENS names and their live expiry/role state directly on Sepolia (the dashboard's Season view reads this live, or query the registry yourself); and the [dashboard](https://quota-bronte.vercel.app) itself, which reads only these public sources and has no backend of its own.
 
+## The cast
+
+Five actors, three of them real-world roles with specific legal meaning under the EU's geographical-indication rules, two of them Hedera accounts:
+
+- **Consortium** — the *Consorzio del Pistacchio Verde di Bronte DOP*. Owns the denomination (the legal right to the name "Pistacchio Verde di Bronte DOP," an EU Protected Designation of Origin) and the ENS name that represents it. Opens seasons and sets the harvest cap. **Does not certify individual producers.**
+- **Control Body** — an accredited, independent inspector (Italian: *organismo di controllo*). Verifies producers and appoints or removes them as Issuers. **Cannot mint a single gram.** This split isn't an arbitrary design choice: EU geographical-indication rules require an independent control body precisely so a consortium can never certify itself. (This role was called "Approver" earlier in this build — renamed once it was clear the label said what the role could do, not who it is. See CLAUDE.md for what did and didn't change as a result.)
+- **Issuer** — a certified producer. Mints only against its own certified harvest. **Cannot appoint or remove anyone.**
+- **Treasury** — the Hedera account that holds newly minted grams until they're moved into processing.
+- **Processor** — the Hedera account that holds grams mid-transformation, between the transfer step and the transform step.
+
+A **season** is a single harvest year for a single denomination — `2026.bronte.quota.eth` is this project's one live season, the 2026 Bronte harvest. Each season has its own ENS name, its own cap, and its own Hedera token; a season's ENS expiry is the entire window during which minting is authorized for it, checked live by the contract on every mint attempt, not a separate timer this project maintains.
+
+## The four proofs
+
+Four different rules. Four different enforcement mechanisms — Hedera consensus, ENS role state, ENS role state again but a different role, and Sepolia reading an ENS record live. Not the same check four times. Three of the four are interactive in the dashboard's local-only Demo tab (see below for why that tab isn't part of the deployed site); all four have a real transaction a judge can open independently, or an honest statement of why there isn't one.
+
+**Proof 1 — cap, enforced by Hedera consensus.**
+What it does: mints harvest-token grams until the token's `maxSupply` (3,400,000,000 grams, fixed at creation) is reached, then mints one more.
+What happens: every mint up to the cap succeeds; the next one is rejected by Hedera itself, not application code — status `TOKEN_MAX_SUPPLY_REACHED`, the network's own consensus refusing the transaction.
+What it proves: the cap is a protocol-level guarantee, not a number this project's code happens to check.
+Real transaction: [the actual failed mint on HashScan](https://hashscan.io/testnet/transaction/0.0.10323351-1788864821-400173065) — permanent, independently checkable. Not repeatable on demand (it would mean minting the full 3.4-billion-gram cap, which can't be undone afterward), so this is the original failure from when the invariant was first proven, not a re-enactment.
+
+**Proof 2 — minting right, enforced by ENS.**
+What it does: the Control Body revokes an Issuer's minting right, then that Issuer attempts to mint.
+What happens: the revoke is a real transaction against the ENS registry on Sepolia. The mint attempt afterward is refused off-chain — the relayer reads the ENS registry directly before ever touching Hedera or Sepolia — so it produces no transaction of its own. That absence is the point: a bad mint attempt costs nothing and leaves nothing to unwind.
+What it proves: the minting right is checked fresh on every attempt, not cached or assumed from a prior grant.
+Real transaction: [the revoke itself, on Etherscan](https://sepolia.etherscan.io/tx/0x44a3ab69322758d48cce80aa261bd4174de4de63113d21a02ab560b0aceaa445) — real, signed by the Control Body's own key, status Success. The refused mint that follows it has no transaction hash to link, by design.
+
+**Proof 3 — separation of powers, enforced by ENS.**
+What it does: the Control Body — which holds the authority to appoint and remove Issuers — attempts to mint using its own address.
+What happens: refused before any transaction is sent, every time. The Control Body's authority was established as admin-only from the moment it was granted; minting was never part of it.
+What it proves: admin authority does not imply minting authority. The Control Body appoints every Issuer in this project and still cannot mint a gram.
+Real transaction: [the registration that granted the Control Body its admin-only authority, on Etherscan](https://sepolia.etherscan.io/tx/0x63ed1ae9a1275ba69581f293d05165b0666fc40a35e5c3dc67ae7b1db7ad0d3f) — real, an ERC-1155 mint of the admin role token to the Control Body's address, nothing else. The refusal itself, like Proof 2's, produces no transaction — there's nothing to broadcast for an attempt the relayer's own off-chain check stops first.
+
+**Proof 4 — yield ceiling, enforced on Sepolia against an ENS record.**
+What it does: claims that processing consumed some input grams to produce a claimed output of kernel (the processed pistachio product).
+What happens: `QuotaAnchor.recordTransform` reads the declared yield ratio live from ENS and computes the ceiling itself — a claim over the ceiling reverts on Sepolia before any Hedera token is touched (confirmed directly: the reverted call never even reaches the network, so there is no transaction hash for it, not just none we recorded); a claim at or under the ceiling succeeds, and the real Hedera legs — input retired, output minted — run only after.
+What it proves: the yield ratio is enforced by the contract itself, reading it live from ENS on every call, not a number a caller gets to supply.
+Real transaction: [a real transform at exactly the ceiling, on Etherscan](https://sepolia.etherscan.io/tx/0x24150928f10735b1bf373f8c5b2ce6e9a37fcad29e9f2b8d963b3794314177b9) — 100g in, 45g out, the season's 4500bp ceiling with zero headroom, `Record Transform` succeeding on-chain. The same check that allowed this reverts an over-ceiling claim before it ever becomes a transaction — verified directly against this contract while writing this section, not assumed: a deliberate `recordTransform` call claiming 100g out from 100g in (well over that input's 45g ceiling) produced a `CALL_EXCEPTION` with no `receipt` and no transaction hash at all — the revert happens during gas estimation, before anything is ever broadcast.
+
+**Try these live.** The dashboard's Demo tab (source: `app/src/components/DemoView.tsx`) has three of these four wired up as real, clickable actions against this same contract and these same tokens — Proof 1 is the one exception, for the reason stated above. It's local-only, not part of the deployed site at [quota-bronte.vercel.app](https://quota-bronte.vercel.app): running it requires the Sepolia relayer key and the Control Body's own signing key in memory to sign real transactions on click, and putting either in a browser bundle or a public host would mean anyone who opens the site controls both. To run it, two terminals from the repo root:
+```bash
+# terminal 1 -- the local signing server
+cd app/server && npm install && npm start   # node --env-file=../../.env index.mjs, binds 127.0.0.1 only
+```
+```bash
+# terminal 2 -- the dashboard itself
+cd app && npm run dev
+```
+Then open the dashboard's Demo tab (visible only under `npm run dev`, absent from `npm run build`'s output entirely — see `app/README.md`).
+
 ## Verify this yourself in 90 seconds
 
 Four checks, each one click or one paste. No repo clone, no install, no keys — you're reading public state, not trusting this document.
