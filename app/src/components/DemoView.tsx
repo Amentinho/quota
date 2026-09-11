@@ -206,6 +206,12 @@ const buttonDangerClass =
   "rounded-md border border-[var(--danger)] px-4 py-2 text-base font-semibold text-[var(--danger)] hover:bg-[var(--danger-soft)] disabled:opacity-50";
 const inputClass = "ml-1 rounded border border-[var(--border)] px-2 py-1";
 
+// `approverAddress` is the field name /config has always returned (the
+// underlying Ethereum address and its ENS_APPROVER_KEY/rotate-season-admin
+// mechanics are all still named "approver" in scripts/relayer.mjs and
+// app/server/index.mjs -- an internal-naming choice, not user-facing).
+// This UI displays that same address under the label "Control Body"
+// everywhere; only the display label changed, not the field it reads.
 type Config = {
   approverAddress: string;
   issuer1Address: string;
@@ -410,7 +416,7 @@ function interpretRole(result: ActionResult): { interpretation: string; steps: C
     const raw = result.raw as RoleRaw;
     return {
       interpretation:
-        "The Approver signed a transaction updating who can mint. This never touches Hedera — the minting right lives entirely in the ENS registry on Sepolia.",
+        "The Control Body signed a transaction updating who can mint. This never touches Hedera — the minting right lives entirely in the ENS registry on Sepolia.",
       steps: [
         { label: "Sepolia: role updated", state: "done", link: raw.txHash ? { label: "Etherscan", url: etherscanUrl(raw.txHash) } : undefined },
       ],
@@ -426,30 +432,31 @@ function interpretRole(result: ActionResult): { interpretation: string; steps: C
 export function DemoView() {
   const configState = useAsync(() => getJson("/config").then((r) => r?.raw as Config), []);
 
-  // 1. Approver -- holds the minting right's ADMIN authority (on-chain:
-  // MINTER_ROLE_ADMIN), never the minting right itself. Grants/revokes the
-  // minting right on whatever address is typed into the editable field
-  // below; cannot mint itself, proven by the "Attempt mint as Approver"
-  // button. Pre-fills with Issuer 1's address, not the Approver's own --
-  // an earlier version left this field blank with copy suggesting "paste
-  // the Approver's own address to see a grant succeed," which is exactly
-  // what happened: granting the minting right to the Approver actually
-  // gives it that right, silently breaking the separation-of-powers proof
-  // below. targetAccountTouched tracks whether the viewer has typed into
-  // the field themselves, so the pre-fill doesn't clobber a deliberate
-  // edit once Issuer 1's address loads.
+  // 1. Control Body -- holds the minting right's admin authority
+  // (on-chain: MINTER_ROLE_ADMIN), never the minting right itself.
+  // Grants/revokes the minting right on whatever address is typed into the
+  // editable field below; cannot mint itself, proven by the "Attempt mint
+  // as Control Body" button. Pre-fills with Issuer 1's address, not the
+  // Control Body's own -- an earlier version left this field blank with
+  // copy suggesting "paste the Control Body's own address to see a grant
+  // succeed," which is exactly what happened: granting the minting right
+  // to the Control Body actually gives it that right, silently breaking
+  // the separation-of-powers proof below. targetAccountTouched tracks
+  // whether the viewer has typed into the field themselves, so the
+  // pre-fill doesn't clobber a deliberate edit once Issuer 1's address
+  // loads.
   const [targetAccount, setTargetAccount] = useState("");
   const [targetAccountTouched, setTargetAccountTouched] = useState(false);
   const [roleResult, setRoleResult] = useState<ActionResult>(null);
   const [rolePending, setRolePending] = useState(false);
-  const [approverMintResult, setApproverMintResult] = useState<ActionResult>(null);
-  const [approverMintPending, setApproverMintPending] = useState(false);
+  const [controlBodyMintResult, setControlBodyMintResult] = useState<ActionResult>(null);
+  const [controlBodyMintPending, setControlBodyMintPending] = useState(false);
 
   const minterHoldersState = useAsync(() => readSeasonEnsState("2026"), []);
 
   // 2. Issuer -- reads the LIVE minting-right holder list (shared with the
-  // Approver section's list above) rather than a hardcoded pair of .env
-  // addresses, so granting a new address through this panel and then
+  // Control Body section's list above) rather than a hardcoded pair of
+  // .env addresses, so granting a new address through this panel and then
   // minting as it works end to end without a code change.
   const [issuerAddress, setIssuerAddress] = useState("");
   const [issuerGrams, setIssuerGrams] = useState(5);
@@ -494,7 +501,7 @@ export function DemoView() {
 
   // Default the issuer selector to the first live minting-right holder,
   // and fall back to it if the currently-selected address stops holding
-  // that right (e.g. it was just revoked from the Approver panel).
+  // that right (e.g. it was just revoked from the Control Body panel).
   useEffect(() => {
     if (minterHolders.length === 0) return;
     if (!minterHolders.some((a) => a.toLowerCase() === issuerAddress.toLowerCase())) {
@@ -503,7 +510,7 @@ export function DemoView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [minterHoldersState.status]);
 
-  const targetIsApprover =
+  const targetIsControlBody =
     !!config && !!targetAccount && targetAccount.toLowerCase() === config.approverAddress.toLowerCase();
 
   const yieldBp = yieldBpState.status === "ready" ? Number(yieldBpState.data) : null;
@@ -513,7 +520,7 @@ export function DemoView() {
   const underfunded = processorBalanceNum !== null && transformInputGrams > processorBalanceNum;
 
   const roleInterp = interpretRole(roleResult);
-  const approverMintInterp = interpretMint(approverMintResult);
+  const controlBodyMintInterp = interpretMint(controlBodyMintResult);
   const issuerMintInterp = interpretMint(issuerMintResult);
   const flowMintInterp = interpretMint(flowMintResult);
   const flowTransferInterp = interpretTransfer(flowTransferResult);
@@ -526,9 +533,9 @@ export function DemoView() {
         deployed, and this tab does not exist in the production build. Every action below sends a real transaction.
       </div>
 
-      {/* ---------------------------------------------------------------
-          OPENING PRIMER
-          --------------------------------------------------------------- */}
+      {/* ===================================================================
+          1. WHAT THE SYSTEM ENFORCES, WHO THE ACTORS ARE, WHY TWO CHAINS
+          =================================================================== */}
       <div className="flex flex-col gap-4 rounded-2xl border-2 border-[var(--accent)] bg-[var(--accent-soft)] p-6">
         <h2 className="text-2xl font-bold text-[var(--text)]">What this tab is showing</h2>
         <p className="text-base text-[var(--text)]">
@@ -536,47 +543,99 @@ export function DemoView() {
           never exceed what was actually grown, no matter how many times it's transferred or processed.
         </p>
 
-        <dl className="grid grid-cols-1 gap-x-8 gap-y-2 rounded-lg bg-[var(--bg)] p-4 text-sm sm:grid-cols-2">
+        <dl className="flex flex-col gap-3 rounded-lg bg-[var(--bg)] p-4 text-sm">
           <div>
             <dt className="font-semibold text-[var(--text)]">Consortium</dt>
-            <dd className="text-[var(--text-muted)]">Owns the harvest's identity on ENS. Already set up, not interactive below.</dd>
+            <dd className="text-[var(--text-muted)]">
+              The <em>Consorzio del Pistacchio Verde di Bronte DOP</em> — the real-world organization that owns the
+              "Bronte PDO Pistachio" designation (PDO: Protected Designation of Origin, an EU status; DOP is the
+              Italian abbreviation for the same thing) and this project's ENS name. Opens seasons and sets the
+              harvest cap. <strong>Does not certify individual producers.</strong>
+            </dd>
           </div>
           <div>
-            <dt className="font-semibold text-[var(--text)]">Approver</dt>
-            <dd className="text-[var(--text-muted)]">Appoints and removes Issuers. Can never mint a gram itself.</dd>
+            <dt className="font-semibold text-[var(--text)]">Control Body</dt>
+            <dd className="text-[var(--text-muted)]">
+              An accredited, independent inspector (the Italian term is <em>organismo di controllo</em>). Verifies
+              producers and appoints or removes them as Issuers. <strong>Cannot mint a single gram.</strong>
+            </dd>
           </div>
           <div>
             <dt className="font-semibold text-[var(--text)]">Issuer</dt>
-            <dd className="text-[var(--text-muted)]">The only role allowed to mint — but only while an Approver has appointed it.</dd>
+            <dd className="text-[var(--text-muted)]">
+              A certified producer — the grower whose harvest this project's grams represent. Mints only against its
+              own certified harvest. <strong>Cannot appoint or remove anyone.</strong>
+            </dd>
           </div>
           <div>
             <dt className="font-semibold text-[var(--text)]">Treasury</dt>
-            <dd className="text-[var(--text-muted)]">The Hedera account that holds newly minted grams.</dd>
+            <dd className="text-[var(--text-muted)]">
+              A Hedera account (not a role held by a person or company) that holds newly minted grams until they're
+              moved into processing.
+            </dd>
           </div>
           <div>
             <dt className="font-semibold text-[var(--text)]">Processor</dt>
-            <dd className="text-[var(--text-muted)]">The Hedera account that holds grams mid-transformation, between transfer and transform.</dd>
+            <dd className="text-[var(--text-muted)]">
+              A Hedera account that holds grams mid-transformation, between the transfer step and the transform step.
+            </dd>
           </div>
         </dl>
 
         <p className="text-base text-[var(--text)]">
-          The rule itself lives as a name and a set of records on ENS. Sepolia (Ethereum's public testnet) checks
-          that rule and permanently records what happened. Hedera — a separate network, built for exactly this kind
-          of asset — is where the actual token balances live and move. That's why every successful action below
-          returns <em>two</em> identifiers, not one: a Hedera transaction ID (the grams actually moved) and a
-          Sepolia transaction hash (the event is now on the public record). Together, they're the proof that both
-          halves of the system agree.
+          This split isn't an arbitrary design choice: EU geographical-indication rules require an independent
+          control body precisely so a consortium can never certify itself.
         </p>
 
-        <p className="text-base font-semibold text-[var(--text)]">
-          The buttons below marked "should be refused" are the ones to click first — each deliberately tries to
-          break a different rule, at a different layer, and fails. That refusal is the demonstration, not a bug.
+        <p className="text-base text-[var(--text)]">
+          The rule itself lives as a name and a set of records on ENS (Ethereum Name Service — a public naming
+          system; think of it as the phone book this project's rule is written into). Sepolia (Ethereum's public
+          testnet) checks that rule and permanently records what happened. Hedera — a separate public ledger, built
+          for exactly this kind of token — is where the actual grams live and move. That's why every successful
+          action below returns <em>two</em> identifiers, not one: a Hedera transaction ID (the grams actually moved)
+          and a Sepolia transaction hash (the event is now on the public record). Together, they're the proof that
+          both halves of the system agree.
         </p>
       </div>
 
-      {/* ---------------------------------------------------------------
-          FOUR PROOFS OVERVIEW
-          --------------------------------------------------------------- */}
+      {/* ===================================================================
+          2. WHAT TO CLICK FIRST
+          =================================================================== */}
+      <div className="flex flex-col gap-3 rounded-2xl border-2 border-[var(--border)] bg-[var(--surface)] p-6">
+        <h2 className="text-xl font-bold text-[var(--text)]">Try it in this order</h2>
+        <p className="text-sm text-[var(--text-muted)]">
+          The buttons below marked "should be refused" are the ones to click first — each deliberately tries to
+          break a different rule, at a different layer, and fails. That refusal is the demonstration, not a bug.
+        </p>
+        <ol className="flex flex-col gap-2 text-sm text-[var(--text)]">
+          <li>
+            <strong>1.</strong> Mint as Issuer (Section 2) — a normal mint, succeeds, returns both transaction IDs.
+          </li>
+          <li>
+            <strong>2.</strong> Attempt mint as Control Body (Section 1) — refused. Proof 3.
+          </li>
+          <li>
+            <strong>3.</strong> Revoke the Issuer you just minted as (Section 1, target field defaults to it).
+          </li>
+          <li>
+            <strong>4.</strong> Mint as that Issuer again (Section 2) — now refused. Proof 2. (Grant it back
+            afterward so the panel is ready for the next viewer.)
+          </li>
+          <li>
+            <strong>5.</strong> Transform above the yield ceiling (Section 3, Step 3) — e.g. 1000g in, 500g out —
+            refused. Proof 4.
+          </li>
+          <li>
+            <strong>6.</strong> Transform at the yield ceiling (Section 3, Step 3) — e.g. 1000g in, 450g out —
+            succeeds. (Needs Steps 1–2 of the Transform flow run first, to fund the Processor.)
+          </li>
+        </ol>
+      </div>
+
+      {/* ===================================================================
+          3. THE FOUR PROOFS (reference — the sections below are where you
+          actually click)
+          =================================================================== */}
       <div className="flex flex-col gap-3 rounded-2xl border-2 border-[var(--border)] bg-[var(--surface)] p-6">
         <h2 className="text-xl font-bold text-[var(--text)]">The four proofs</h2>
         <p className="text-sm text-[var(--text-muted)]">
@@ -610,15 +669,15 @@ export function DemoView() {
           <li className="rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
             <ProofBadge number={2} name="Minting right, enforced by ENS" />
             <p className="mt-2 text-sm text-[var(--text-muted)]">
-              Only an address the Approver has appointed holds the right to mint. Try it in Section 1 (revoke an
+              Only a producer the Control Body has appointed holds the right to mint. Try it in Section 1 (revoke an
               Issuer) and Section 2 (mint as that Issuer — refused).
             </p>
           </li>
           <li className="rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
             <ProofBadge number={3} name="Separation of powers, enforced by ENS" />
             <p className="mt-2 text-sm text-[var(--text-muted)]">
-              Appointing Issuers and minting are different rights, held by different roles. Try it in Section 1 —
-              the Approver can never mint, no matter how many Issuers it has appointed.
+              Appointing Issuers and minting are different rights, held by different roles — the Control Body that
+              certifies producers can never mint itself. Try it in Section 1.
             </p>
           </li>
           <li className="rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
@@ -632,48 +691,25 @@ export function DemoView() {
         </ol>
       </div>
 
-      {/* ---------------------------------------------------------------
-          TRY IT IN ORDER
-          --------------------------------------------------------------- */}
-      <div className="flex flex-col gap-3 rounded-2xl border-2 border-[var(--border)] bg-[var(--surface)] p-6">
-        <h2 className="text-xl font-bold text-[var(--text)]">Try it in this order</h2>
-        <ol className="flex flex-col gap-2 text-sm text-[var(--text)]">
-          <li>
-            <strong>1.</strong> Mint as Issuer (Section 2) — a normal mint, succeeds, returns both transaction IDs.
-          </li>
-          <li>
-            <strong>2.</strong> Attempt mint as Approver (Section 1) — refused. Proof 3.
-          </li>
-          <li>
-            <strong>3.</strong> Revoke the Issuer you just minted as (Section 1, target field defaults to it).
-          </li>
-          <li>
-            <strong>4.</strong> Mint as that Issuer again (Section 2) — now refused. Proof 2. (Grant it back
-            afterward so the panel is ready for the next viewer.)
-          </li>
-          <li>
-            <strong>5.</strong> Transform above the yield ceiling (Section 3, Step 3) — e.g. 1000g in, 500g out —
-            refused. Proof 4.
-          </li>
-          <li>
-            <strong>6.</strong> Transform at the yield ceiling (Section 3, Step 3) — e.g. 1000g in, 450g out —
-            succeeds. (Needs Steps 1–2 of the Transform flow run first, to fund the Processor.)
-          </li>
-        </ol>
-      </div>
-
-      <Section step="1 — Consortium → Approver" title="Approver" description="Appoints and removes Issuers. Never holds the right to mint itself.">
+      {/* ===================================================================
+          4. CONSORTIUM → CONTROL BODY
+          =================================================================== */}
+      <Section
+        step="1 — Consortium → Control Body"
+        title="Control Body"
+        description="Verifies producers and appoints or removes them as Issuers. Never holds the right to mint itself."
+      >
         {config && (
           <p className="text-sm text-[var(--text-muted)]">
-            Approver: <RoleIdentity address={config.approverAddress} className="text-[var(--text)]" />
+            Control Body: <RoleIdentity address={config.approverAddress} className="text-[var(--text)]" />
           </p>
         )}
 
         <ActionCard
           title="Grant / revoke the minting right"
-          whatThisDoes="The Approver, using its own signing key, adds or removes the minting right for the address typed below (pre-filled with Issuer 1 — edit it to target any address)."
+          whatThisDoes="The Control Body, using its own signing key, adds or removes the minting right for the address typed below (pre-filled with Issuer 1 — edit it to target any address)."
           whatToExpect="Succeeds and sends a real transaction if the address's minting right is actually changing. If it already matches what you're asking for, nothing is sent — shown as NOTHING SENT below, checked on-chain first rather than sent and left to fail or waste gas."
-          whatItProves="The Approver — and only the Approver — controls who can mint, without ever being able to mint itself."
+          whatItProves="The Control Body — and only the Control Body — controls who can mint, without ever being able to mint itself."
           result={roleResult}
           interpretation={roleInterp?.interpretation}
           steps={roleInterp?.steps}
@@ -692,10 +728,10 @@ export function DemoView() {
               className={`${inputClass} w-96 font-mono`}
             />
           </label>
-          {targetIsApprover && (
+          {targetIsControlBody && (
             <p className="w-full rounded-md border border-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 font-semibold text-[var(--danger)]">
-              This is the Approver's own address. Granting it the minting right breaks the separation this panel is
-              demonstrating — it would then be able to both appoint Issuers and mint.
+              This is the Control Body's own address. Granting it the minting right breaks the separation this panel
+              is demonstrating — it would then be able to both appoint Issuers and mint.
             </p>
           )}
           <button
@@ -740,30 +776,33 @@ export function DemoView() {
         </div>
 
         <ActionCard
-          title="Attempt mint as Approver"
+          title="Attempt mint as Control Body"
           proof={{ number: 3, name: "Separation of powers" }}
-          whatThisDoes="Tries to mint 1g using the Approver's own address as the minting identity."
-          whatToExpect="Always refused, before any transaction is sent — the Approver never holds the minting right, no matter how many Issuers it has appointed."
-          whatItProves="Admin authority does not imply minting authority. The Approver appoints every Issuer and still cannot mint a single gram."
-          result={approverMintResult}
-          interpretation={approverMintInterp?.interpretation}
-          steps={approverMintInterp?.steps}
-          pending={approverMintPending}
+          whatThisDoes="Tries to mint 1g using the Control Body's own address as the minting identity."
+          whatToExpect="Always refused, before any transaction is sent — the Control Body never holds the minting right, no matter how many Issuers it has appointed."
+          whatItProves="Admin authority does not imply minting authority. The Control Body appoints every Issuer and still cannot mint a single gram."
+          result={controlBodyMintResult}
+          interpretation={controlBodyMintInterp?.interpretation}
+          steps={controlBodyMintInterp?.steps}
+          pending={controlBodyMintPending}
         >
           <button
             className={buttonDangerClass}
-            disabled={approverMintPending || !config}
+            disabled={controlBodyMintPending || !config}
             onClick={async () => {
-              setApproverMintPending(true);
-              setApproverMintResult(await post("/mint", { grams: 1, certifier: config?.approverAddress }));
-              setApproverMintPending(false);
+              setControlBodyMintPending(true);
+              setControlBodyMintResult(await post("/mint", { grams: 1, certifier: config?.approverAddress }));
+              setControlBodyMintPending(false);
             }}
           >
-            Attempt mint as Approver (should be refused)
+            Attempt mint as Control Body (should be refused)
           </button>
         </ActionCard>
       </Section>
 
+      {/* ===================================================================
+          5. ISSUER
+          =================================================================== */}
       <Section
         step="2 — Issuer"
         title="Issuer"
@@ -773,7 +812,7 @@ export function DemoView() {
           title="Mint as Issuer"
           proof={{ number: 2, name: "Minting right (after a revoke above)" }}
           whatThisDoes="Mints the given amount of harvest-token grams, using the selected address's minting right as authorization."
-          whatToExpect="Succeeds if the selected address currently holds the minting right — the normal case. Refused if it doesn't, e.g. right after revoking it in Section 1."
+          whatToExpect="Succeeds if the selected address currently holds the minting right — the normal case. Refused if it doesn't, e.g. right after the Control Body revokes it in Section 1."
           whatItProves="Minting requires the minting right, checked fresh every time — not a permission you keep forever once granted, and not implied by anything else."
           result={issuerMintResult}
           interpretation={issuerMintInterp?.interpretation}
@@ -814,6 +853,9 @@ export function DemoView() {
         </ActionCard>
       </Section>
 
+      {/* ===================================================================
+          6. TRANSFORM FLOW
+          =================================================================== */}
       <Section
         step="3 — Transform flow"
         title="Mint → Transfer → Transform"

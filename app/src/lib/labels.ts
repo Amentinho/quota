@@ -27,8 +27,14 @@ export function seasonLabel(id: string): string {
 // this project actually authorizes against (hasRoles on the season
 // resource) never consult these names or this map -- an address not in
 // here just renders as an address, same as before this existed.
+// "approver.bronte.quota.eth" (the original name for this address) was
+// unregistered and replaced with "control-body.bronte.quota.eth" when the
+// role itself was renamed from "Approver" to "Control Body" -- the
+// display label and the ENS name now agree, deliberately, rather than
+// carrying a mismatch forward. See CLAUDE.md for why the rename was cheap
+// enough to do properly instead of just patching the label.
 const KNOWN_ROLE_NAMES: Record<string, string> = {
-  "0x2006deb6e0e8ed48e2b2afaf463ae3e480b9e375": "approver.bronte.quota.eth",
+  "0x2006deb6e0e8ed48e2b2afaf463ae3e480b9e375": "control-body.bronte.quota.eth",
   "0x7dfdd0fd40a1e4208bce04ac534b493ec4627ec6": "issuer-1.bronte.quota.eth",
   "0x1bea120ffdc00b26acb8357838e7eebae8464edb": "issuer-2.bronte.quota.eth",
 };
